@@ -4,6 +4,7 @@ import {
   getJobs,
   getCandidates,
   getExtensionFilterDiagnostics,
+  getGreetingBatch,
   getGreetingTest,
   getLogs,
   getRecommendQueue,
@@ -20,6 +21,7 @@ import {
   updateTemplate,
   type Candidate,
   type FilterResult,
+  type GreetingBatchState,
   type GreetingTestReport,
   type ExtensionFilterDiagnosticsReport,
   type Job,
@@ -50,6 +52,7 @@ export function App() {
   const [extensionFilterDiagnostics, setExtensionFilterDiagnostics] = useState<ExtensionFilterDiagnosticsReport | null>(null);
   const [recommendQueue, setRecommendQueue] = useState<RecommendQueueReport | null>(null);
   const [greetingTest, setGreetingTest] = useState<GreetingTestReport | null>(null);
+  const [greetingBatch, setGreetingBatch] = useState<GreetingBatchState | null>(null);
   const [diagnosingSelectors, setDiagnosingSelectors] = useState(false);
   const [savingJob, setSavingJob] = useState(false);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
@@ -68,7 +71,7 @@ export function App() {
   }, []);
 
   const load = useCallback(async () => {
-    const [nextState, nextJobs, nextTemplates, nextSchedule, nextLogs, nextExtensionDiagnostics, nextRecommendQueue, nextGreetingTest] = await Promise.all([
+    const [nextState, nextJobs, nextTemplates, nextSchedule, nextLogs, nextExtensionDiagnostics, nextRecommendQueue, nextGreetingTest, nextGreetingBatch] = await Promise.all([
       getState(),
       getJobs(),
       getTemplates(),
@@ -76,7 +79,8 @@ export function App() {
       getLogs(),
       getExtensionFilterDiagnostics(),
       getRecommendQueue(),
-      getGreetingTest()
+      getGreetingTest(),
+      getGreetingBatch()
     ]);
     const activeJob = nextJobs[0] ?? null;
     const nextCandidates = activeJob ? await getCandidates(activeJob.id) : [];
@@ -90,6 +94,7 @@ export function App() {
     setExtensionFilterDiagnostics(nextExtensionDiagnostics);
     setRecommendQueue(nextRecommendQueue);
     setGreetingTest(nextGreetingTest);
+    setGreetingBatch(nextGreetingBatch);
     setCandidates(nextCandidates);
     if (nextCandidates.length > 0) {
       setFilterResult({
@@ -130,6 +135,10 @@ export function App() {
     source.addEventListener("greeting-test", (event) => {
       const parsed = JSON.parse((event as MessageEvent).data) as { payload: GreetingTestReport };
       setGreetingTest(parsed.payload);
+    });
+    source.addEventListener("greeting-batch", (event) => {
+      const parsed = JSON.parse((event as MessageEvent).data) as { payload: GreetingBatchState };
+      setGreetingBatch(parsed.payload);
     });
     source.addEventListener("send-progress", refresh);
     return () => source.close();
@@ -249,6 +258,7 @@ export function App() {
             extensionDiagnostics={extensionFilterDiagnostics}
             recommendQueue={recommendQueue}
             greetingTest={greetingTest}
+            greetingBatch={greetingBatch}
             onChange={setJob}
             onSave={() => void handleSaveJob().catch((saveError: unknown) => setError(toMessage(saveError)))}
             onFilter={() => void handleFilter().catch((filterError: unknown) => setError(toMessage(filterError)))}

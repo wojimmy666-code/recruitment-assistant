@@ -126,6 +126,38 @@ type ExtensionGreetingTestReport = {
   clickResult: ExtensionGreetingActionResult;
   composerResult: ExtensionGreetingActionResult;
 };
+
+type ExtensionGreetingBatchRecord = {
+  at: string;
+  status: string;
+  errorMessage: string;
+  item: ExtensionRecommendQueueItem;
+  messagePreview: string;
+  clickResult: ExtensionGreetingActionResult;
+  composerResult: ExtensionGreetingActionResult;
+};
+
+type ExtensionGreetingBatchState = {
+  id: string;
+  status: "running" | "waiting_confirmation" | "waiting_interval" | "paused" | "completed" | "blocked";
+  mode: "manual_confirm";
+  targetCount: number;
+  intervalMinSeconds: number;
+  intervalMaxSeconds: number;
+  startedAt: string;
+  updatedAt: string;
+  nextAllowedAt: string;
+  pauseReason: string;
+  queueSize: number;
+  selectedJobText: string;
+  sourceUrl: string;
+  attempted: number;
+  filled: number;
+  failed: number;
+  blocked: number;
+  skipped: number;
+  records: ExtensionGreetingBatchRecord[];
+};
 type ExtensionRecommendQueueReport = {
   sourceUrl: string;
   title: string;
@@ -152,6 +184,7 @@ type ExtensionRecommendQueueReport = {
 let lastFilterDiagnostics: ExtensionFilterDiagnosticsReport | null = null;
 let lastRecommendQueue: ExtensionRecommendQueueReport | null = null;
 let lastGreetingTest: ExtensionGreetingTestReport | null = null;
+let lastGreetingBatch: ExtensionGreetingBatchState | null = null;
 
 export function createExtensionRouter({ db }: { db: AppDatabase }) {
   const router = Router();
@@ -170,6 +203,10 @@ export function createExtensionRouter({ db }: { db: AppDatabase }) {
 
   router.get("/greeting-test", (_req, res) => {
     res.json(lastGreetingTest);
+  });
+
+  router.get("/greeting-batch", (_req, res) => {
+    res.json(lastGreetingBatch);
   });
 
   router.post("/filter-diagnostics", asyncHandler(async (req, res) => {
@@ -232,6 +269,89 @@ export function createExtensionRouter({ db }: { db: AppDatabase }) {
     });
   }));
 
+  router.post("/greeting-batch/start", asyncHandler(async (req, res) => {
+    if (!lastRecommendQueue || lastRecommendQueue.items.length === 0) {
+      throw new Error("recommend_queue_not_found");
+    }
+
+    const available = lastRecommendQueue.items.filter((item) => item.greetingButtonSelector);
+    if (available.length === 0) {
+      throw new Error("recommend_queue_has_no_greeting_button");
+    }
+
+    const now = new Date().toISOString();
+    const targetCount = clampNumber(req.body.targetCount ?? req.body.target_count, 1, Math.min(20, available.length), Math.min(3, available.length));
+    const intervalMinSeconds = clampNumber(req.body.intervalMinSeconds ?? req.body.interval_min_seconds, 30, 3600, 45);
+    const intervalMaxSeconds = clampNumber(req.body.intervalMaxSeconds ?? req.body.interval_max_seconds, intervalMinSeconds, 7200, Math.max(intervalMinSeconds, 90));
+
+    lastGreetingBatch = {
+      id: `batch-${Date.now()}`,
+      status: "running",
+      mode: "manual_confirm",
+      targetCount,
+      intervalMinSeconds,
+      intervalMaxSeconds,
+      startedAt: now,
+      updatedAt: now,
+      nextAllowedAt: "",
+      pauseReason: "",
+      queueSize: available.length,
+      selectedJobText: lastRecommendQueue.selectedJobText,
+      sourceUrl: lastRecommendQueue.sourceUrl,
+      attempted: 0,
+      filled: 0,
+      failed: 0,
+      blocked: 0,
+      skipped: 0,
+      records: []
+    };
+
+    const nextItem = getNextGreetingBatchItem();
+    emitGreetingBatch();
+    res.json({ ok: true, batch: lastGreetingBatch, nextItem, waitSeconds: 0 });
+  }));
+
+  router.post("/greeting-batch/next", asyncHandler(async (_req, res) => {
+    if (!lastGreetingBatch) throw new Error("greeting_batch_not_started");
+    if (lastGreetingBatch.status === "blocked" || lastGreetingBatch.status === "paused" || lastGreetingBatch.status === "completed") {
+      res.json({ ok: true, batch: lastGreetingBatch, nextItem: null, waitSeconds: 0 });
+      return;
+    }
+
+    const waitSeconds = getBatchWaitSeconds();
+    if (waitSeconds > 0) {
+      lastGreetingBatch.status = "waiting_interval";
+      lastGreetingBatch.updatedAt = new Date().toISOString();
+      emitGreetingBatch();
+      res.json({ ok: true, batch: lastGreetingBatch, nextItem: null, waitSeconds });
+      return;
+    }
+
+    lastGreetingBatch.status = "running";
+    lastGreetingBatch.updatedAt = new Date().toISOString();
+    const nextItem = getNextGreetingBatchItem();
+    emitGreetingBatch();
+    res.json({ ok: true, batch: lastGreetingBatch, nextItem, waitSeconds: 0 });
+  }));
+
+  router.post("/greeting-batch/record", asyncHandler(async (req, res) => {
+    if (!lastGreetingBatch) throw new Error("greeting_batch_not_started");
+
+    const record = normalizeGreetingBatchRecord(req.body, lastGreetingBatch.sourceUrl);
+    applyGreetingBatchRecord(record);
+    emitGreetingBatch();
+    res.json({ ok: true, batch: lastGreetingBatch, record });
+  }));
+
+  router.post("/greeting-batch/pause", asyncHandler(async (req, res) => {
+    if (!lastGreetingBatch) throw new Error("greeting_batch_not_started");
+    lastGreetingBatch.status = "paused";
+    lastGreetingBatch.pauseReason = truncateText(String(req.body.reason || "\u7528\u6237\u624b\u52a8\u6682\u505c"), 160);
+    lastGreetingBatch.updatedAt = new Date().toISOString();
+    emitGreetingBatch();
+    res.json({ ok: true, batch: lastGreetingBatch });
+  }));
+
   router.post("/candidates", asyncHandler(async (req, res) => {
     const defaultJob = getDefaultJob(db);
     const jobId = Number(req.body.jobId || defaultJob?.id);
@@ -255,6 +375,104 @@ export function createExtensionRouter({ db }: { db: AppDatabase }) {
   }));
 
   return router;
+}
+
+function normalizeGreetingBatchRecord(input: unknown, pageUrl: string): ExtensionGreetingBatchRecord {
+  const record = toRecord(input);
+  const clickResult = normalizeGreetingActionResult(record.clickResult);
+  const composerResult = normalizeGreetingActionResult(record.composerResult);
+  const blockedReason = composerResult.blockedReason || clickResult.blockedReason;
+  const status = blockedReason ? "blocked" : composerResult.inputSelector && composerResult.filled ? "filled" : "failed";
+  const errorMessage = blockedReason || composerResult.reason || clickResult.reason || "";
+
+  return {
+    at: new Date().toISOString(),
+    status,
+    errorMessage: truncateText(errorMessage, 240),
+    item: normalizeGreetingTestItem(record.item, pageUrl),
+    messagePreview: truncateText(String(record.messagePreview || composerResult.messagePreview || ""), 160),
+    clickResult,
+    composerResult
+  };
+}
+
+function applyGreetingBatchRecord(record: ExtensionGreetingBatchRecord) {
+  if (!lastGreetingBatch) return;
+
+  lastGreetingBatch.records = [...lastGreetingBatch.records, record].slice(-100);
+  lastGreetingBatch.attempted += 1;
+  lastGreetingBatch.updatedAt = record.at;
+
+  if (record.status === "blocked") {
+    lastGreetingBatch.blocked += 1;
+    lastGreetingBatch.status = "blocked";
+    lastGreetingBatch.pauseReason = record.errorMessage || "blocked";
+    lastGreetingBatch.nextAllowedAt = "";
+    return;
+  }
+
+  if (record.status === "filled") {
+    lastGreetingBatch.filled += 1;
+    if (lastGreetingBatch.filled >= lastGreetingBatch.targetCount) {
+      lastGreetingBatch.status = "completed";
+      lastGreetingBatch.pauseReason = "";
+      lastGreetingBatch.nextAllowedAt = "";
+      return;
+    }
+
+    lastGreetingBatch.status = "waiting_confirmation";
+    lastGreetingBatch.pauseReason = "\u7b49\u5f85\u4eba\u5de5\u786e\u8ba4\u53d1\u9001\u5e76\u8fd4\u56de\u63a8\u8350\u9875\u540e\u7ee7\u7eed\u3002";
+    lastGreetingBatch.nextAllowedAt = nextBatchAllowedAt(lastGreetingBatch.intervalMinSeconds, lastGreetingBatch.intervalMaxSeconds);
+    return;
+  }
+
+  lastGreetingBatch.failed += 1;
+  lastGreetingBatch.status = "paused";
+  lastGreetingBatch.pauseReason = record.errorMessage || "\u5355\u4eba\u5904\u7406\u5931\u8d25\uff0c\u5df2\u6682\u505c\u3002";
+  lastGreetingBatch.nextAllowedAt = "";
+}
+
+function getNextGreetingBatchItem() {
+  if (!lastGreetingBatch || !lastRecommendQueue) return null;
+  if (lastGreetingBatch.filled >= lastGreetingBatch.targetCount) {
+    lastGreetingBatch.status = "completed";
+    lastGreetingBatch.nextAllowedAt = "";
+    return null;
+  }
+
+  const processed = new Set(lastGreetingBatch.records.map((record) => record.item.externalKey).filter(Boolean));
+  const nextItem = lastRecommendQueue.items.find((item) => item.greetingButtonSelector && !processed.has(item.externalKey));
+  if (!nextItem) {
+    lastGreetingBatch.status = "completed";
+    lastGreetingBatch.pauseReason = lastGreetingBatch.filled >= lastGreetingBatch.targetCount ? "" : "\u63a8\u8350\u961f\u5217\u6ca1\u6709\u66f4\u591a\u53ef\u6253\u62db\u547c\u5019\u9009\u4eba\u3002";
+    lastGreetingBatch.nextAllowedAt = "";
+    return null;
+  }
+
+  return nextItem;
+}
+
+function getBatchWaitSeconds() {
+  if (!lastGreetingBatch?.nextAllowedAt) return 0;
+  const waitMs = new Date(lastGreetingBatch.nextAllowedAt).getTime() - Date.now();
+  return Math.max(0, Math.ceil(waitMs / 1000));
+}
+
+function nextBatchAllowedAt(minSeconds: number, maxSeconds: number) {
+  const min = Math.max(30, Math.min(minSeconds, maxSeconds));
+  const max = Math.max(min, maxSeconds);
+  const seconds = min + Math.floor(Math.random() * (max - min + 1));
+  return new Date(Date.now() + seconds * 1000).toISOString();
+}
+
+function clampNumber(value: unknown, min: number, max: number, fallback: number) {
+  const parsed = Number(value);
+  const number = Number.isFinite(parsed) ? parsed : fallback;
+  return Math.max(min, Math.min(max, Math.floor(number)));
+}
+
+function emitGreetingBatch() {
+  if (lastGreetingBatch) eventHub.emit("greeting-batch", lastGreetingBatch);
 }
 
 function normalizeGreetingTestReport(input: unknown, pageUrl: string): ExtensionGreetingTestReport {

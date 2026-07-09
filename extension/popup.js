@@ -5,6 +5,12 @@ const collectButton = document.getElementById("collect");
 const filterCollectButton = document.getElementById("filter-collect");
 const recommendQueueButton = document.getElementById("recommend-queue");
 const singleGreetingTestButton = document.getElementById("single-greeting-test");
+const batchTargetInput = document.getElementById("batch-target");
+const batchIntervalMinInput = document.getElementById("batch-interval-min");
+const batchIntervalMaxInput = document.getElementById("batch-interval-max");
+const batchStartButton = document.getElementById("batch-start");
+const batchContinueButton = document.getElementById("batch-continue");
+const batchPauseButton = document.getElementById("batch-pause");
 const diagnoseFiltersButton = document.getElementById("diagnose-filters");
 const openAppButton = document.getElementById("open-app");
 
@@ -22,6 +28,18 @@ recommendQueueButton.addEventListener("click", () => {
 
 singleGreetingTestButton.addEventListener("click", () => {
   void runSingleGreetingTest();
+});
+
+batchStartButton.addEventListener("click", () => {
+  void runGreetingBatchStep({ startNew: true });
+});
+
+batchContinueButton.addEventListener("click", () => {
+  void runGreetingBatchStep({ startNew: false });
+});
+
+batchPauseButton.addEventListener("click", () => {
+  void pauseGreetingBatch();
 });
 
 diagnoseFiltersButton.addEventListener("click", () => {
@@ -309,6 +327,141 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function runGreetingBatchStep({ startNew }) {
+  setBusy(true, startNew ? "\u6b63\u5728\u542f\u52a8\u6279\u91cf\u4eba\u5de5\u786e\u8ba4..." : "\u6b63\u5728\u51c6\u5907\u7ee7\u7eed\u4e0b\u4e00\u4e2a...");
+  resultEl.hidden = true;
+  resultEl.replaceChildren();
+
+  try {
+    await assertLocalToolReady();
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id || !tab.url?.includes("zhipin.com")) {
+      throw new Error("\u8bf7\u5148\u5207\u6362\u5230 BOSS \u63a8\u8350\u9875\uff0c\u5e76\u786e\u4fdd\u5df2\u767b\u5f55\u3002");
+    }
+
+    const nextPayload = startNew ? await startGreetingBatch() : await getNextGreetingBatchItemFromServer();
+    if (nextPayload.waitSeconds > 0) {
+      statusEl.textContent = `\u8ddd\u79bb\u4e0b\u4e00\u6b21\u53ef\u64cd\u4f5c\u8fd8\u9700\u7b49\u5f85 ${nextPayload.waitSeconds} \u79d2\u3002`;
+      renderGreetingBatchResult(nextPayload.batch);
+      return;
+    }
+
+    if (!nextPayload.nextItem) {
+      statusEl.textContent = batchDoneText(nextPayload.batch);
+      renderGreetingBatchResult(nextPayload.batch);
+      return;
+    }
+
+    const message = await getDefaultGreetingMessage();
+    const item = nextPayload.nextItem;
+    statusEl.textContent = `\u6b63\u5728\u5904\u7406\u7b2c ${item.index + 1} \u4e2a\u5019\u9009\u4eba\uff1a${item.displayName || "\u5019\u9009\u4eba"}`;
+
+    const clickResult = await clickGreetingInTab(tab.id, item);
+    await sleep(1800);
+
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const inspectTabId = activeTab?.id && activeTab.url?.includes("zhipin.com") ? activeTab.id : tab.id;
+    const composerResult = await inspectGreetingComposerInTab(inspectTabId, message);
+
+    const recordResponse = await fetch(`${localBaseUrl}/api/extension/greeting-batch/record`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        item,
+        messagePreview: message.slice(0, 120),
+        clickResult,
+        composerResult
+      })
+    });
+    const recordPayload = await recordResponse.json();
+    if (!recordResponse.ok) throw new Error(recordPayload.error || "\u4e0a\u62a5\u6279\u91cf\u8bb0\u5f55\u5931\u8d25\u3002");
+
+    statusEl.textContent = composerResult.blockedReason
+      ? `\u6279\u91cf\u5df2\u505c\u6b62\uff1a${composerResult.blockedReason}`
+      : composerResult.inputSelector
+        ? "\u5df2\u586b\u5165\u6587\u6848\uff0c\u8bf7\u4eba\u5de5\u786e\u8ba4\u53d1\u9001\uff0c\u8fd4\u56de\u63a8\u8350\u9875\u540e\u70b9\u7ee7\u7eed\u4e0b\u4e00\u4e2a\u3002"
+        : "\u672a\u8bc6\u522b\u5230\u8f93\u5165\u6846\uff0c\u6279\u91cf\u5df2\u6682\u505c\u3002";
+    renderGreetingBatchResult(recordPayload.batch);
+  } catch (error) {
+    statusEl.textContent = error instanceof Error ? error.message : String(error);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function startGreetingBatch() {
+  const response = await fetch(`${localBaseUrl}/api/extension/greeting-batch/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      targetCount: numberInputValue(batchTargetInput, 3),
+      intervalMinSeconds: numberInputValue(batchIntervalMinInput, 45),
+      intervalMaxSeconds: numberInputValue(batchIntervalMaxInput, 90)
+    })
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || "\u542f\u52a8\u6279\u91cf\u5931\u8d25\u3002");
+  return payload;
+}
+
+async function getNextGreetingBatchItemFromServer() {
+  const response = await fetch(`${localBaseUrl}/api/extension/greeting-batch/next`, { method: "POST" });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || "\u8bfb\u53d6\u6279\u91cf\u4e0b\u4e00\u4e2a\u5931\u8d25\u3002");
+  return payload;
+}
+
+async function pauseGreetingBatch() {
+  setBusy(true, "\u6b63\u5728\u6682\u505c\u6279\u91cf...");
+  resultEl.hidden = true;
+  resultEl.replaceChildren();
+  try {
+    await assertLocalToolReady();
+    const response = await fetch(`${localBaseUrl}/api/extension/greeting-batch/pause`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: "\u7528\u6237\u624b\u52a8\u6682\u505c" })
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "\u6682\u505c\u6279\u91cf\u5931\u8d25\u3002");
+    statusEl.textContent = "\u6279\u91cf\u5df2\u6682\u505c\u3002";
+    renderGreetingBatchResult(payload.batch);
+  } catch (error) {
+    statusEl.textContent = error instanceof Error ? error.message : String(error);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function getDefaultGreetingMessage() {
+  const [jobsResponse, templatesResponse] = await Promise.all([
+    fetch(`${localBaseUrl}/api/jobs`),
+    fetch(`${localBaseUrl}/api/templates`)
+  ]);
+  if (!jobsResponse.ok) throw new Error("\u8bfb\u53d6\u672c\u5730\u804c\u4f4d\u5931\u8d25\u3002");
+  if (!templatesResponse.ok) throw new Error("\u8bfb\u53d6\u6253\u62db\u547c\u6a21\u677f\u5931\u8d25\u3002");
+  const jobs = await jobsResponse.json();
+  const templates = await templatesResponse.json();
+  const job = Array.isArray(jobs) ? jobs[0] : null;
+  const template = Array.isArray(templates) ? templates[0] : null;
+  const message = renderTemplateMessage(template?.body || "", job);
+  if (!message) throw new Error("\u672c\u5730\u6253\u62db\u547c\u6587\u6848\u4e3a\u7a7a\uff0c\u8bf7\u5148\u5728\u672c\u5730\u5de5\u5177\u586b\u5199\u6a21\u677f\u3002");
+  return message;
+}
+
+function numberInputValue(input, fallback) {
+  const parsed = Number(input?.value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function batchDoneText(batch) {
+  if (!batch) return "\u6279\u91cf\u72b6\u6001\u672a\u77e5\u3002";
+  if (batch.status === "completed") return "\u6279\u91cf\u5df2\u5b8c\u6210\u3002";
+  if (batch.status === "blocked") return `\u6279\u91cf\u5df2\u505c\u6b62\uff1a${batch.pauseReason || "blocked"}`;
+  if (batch.status === "paused") return `\u6279\u91cf\u5df2\u6682\u505c\uff1a${batch.pauseReason || "paused"}`;
+  return "\u6ca1\u6709\u53ef\u7ee7\u7eed\u5904\u7406\u7684\u5019\u9009\u4eba\u3002";
+}
+
 async function diagnoseFilterControls() {
   setBusy(true, "正在诊断当前 BOSS 页筛选控件...");
   resultEl.hidden = true;
@@ -554,6 +707,34 @@ async function assertLocalToolReady() {
   }
 }
 
+function renderGreetingBatchResult(batch) {
+  resultEl.hidden = false;
+  resultEl.replaceChildren();
+  if (!batch) return;
+
+  const summary = document.createElement("p");
+  summary.textContent = `\u6279\u91cf ${batch.status} \u00b7 \u76ee\u6807 ${batch.targetCount} \u00b7 \u5df2\u586b\u5165 ${batch.filled} \u00b7 \u5931\u8d25 ${batch.failed} \u00b7 \u963b\u65ad ${batch.blocked}`;
+  resultEl.append(summary);
+
+  if (batch.pauseReason) {
+    const reason = document.createElement("code");
+    reason.textContent = batch.pauseReason;
+    resultEl.append(reason);
+  }
+
+  if (batch.nextAllowedAt) {
+    const wait = document.createElement("code");
+    wait.textContent = `\u4e0b\u6b21\u6700\u65e9\u65f6\u95f4\uff1a${new Date(batch.nextAllowedAt).toLocaleTimeString()}`;
+    resultEl.append(wait);
+  }
+
+  for (const record of (batch.records || []).slice(-4).reverse()) {
+    const row = document.createElement("code");
+    row.textContent = `${record.status} \u00b7 ${record.item?.displayName || "\u5019\u9009\u4eba"} \u00b7 ${record.errorMessage || record.composerResult?.inputSelector || ""}`;
+    resultEl.append(row);
+  }
+}
+
 function renderGreetingTestResult(report) {
   resultEl.hidden = false;
   resultEl.replaceChildren();
@@ -647,6 +828,9 @@ function setBusy(isBusy, message) {
   filterCollectButton.disabled = isBusy;
   recommendQueueButton.disabled = isBusy;
   singleGreetingTestButton.disabled = isBusy;
+  batchStartButton.disabled = isBusy;
+  batchContinueButton.disabled = isBusy;
+  batchPauseButton.disabled = isBusy;
   diagnoseFiltersButton.disabled = isBusy;
   if (message) statusEl.textContent = message;
 }

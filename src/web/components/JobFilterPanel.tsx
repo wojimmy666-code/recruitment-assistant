@@ -1,5 +1,5 @@
 import { Save, Search } from "lucide-react";
-import type { Candidate, ExtensionFilterDiagnosticElement, ExtensionFilterDiagnosticsReport, ExtensionFilterFrameDiagnostics, FilterResult, GreetingTestReport, Job, RecommendQueueReport, SelectorDiagnostics } from "../api";
+import type { Candidate, ExtensionFilterDiagnosticElement, ExtensionFilterDiagnosticsReport, ExtensionFilterFrameDiagnostics, FilterResult, GreetingBatchState, GreetingTestReport, Job, RecommendQueueReport, SelectorDiagnostics } from "../api";
 
 type Props = {
   job: Job;
@@ -11,6 +11,7 @@ type Props = {
   extensionDiagnostics: ExtensionFilterDiagnosticsReport | null;
   recommendQueue: RecommendQueueReport | null;
   greetingTest: GreetingTestReport | null;
+  greetingBatch: GreetingBatchState | null;
   onChange: (job: Job) => void;
   onSave: () => void;
   onFilter: () => void;
@@ -27,6 +28,7 @@ export function JobFilterPanel({
   extensionDiagnostics,
   recommendQueue,
   greetingTest,
+  greetingBatch,
   onChange,
   onSave,
   onFilter,
@@ -118,6 +120,8 @@ export function JobFilterPanel({
 
       {greetingTest ? <GreetingTestBox report={greetingTest} /> : null}
 
+      {greetingBatch ? <GreetingBatchBox report={greetingBatch} /> : null}
+
       {extensionDiagnostics ? <ExtensionFilterDiagnosticsBox diagnostics={extensionDiagnostics} /> : null}
 
       {diagnostics ? (
@@ -201,6 +205,37 @@ function GreetingTestBox({ report }: { report: GreetingTestReport }) {
       </div>
     </div>
   );
+}
+
+function GreetingBatchBox({ report }: { report: GreetingBatchState }) {
+  return (
+    <div className="diagnosticsBox greetingBatchBox">
+      <strong>{"\u6279\u91cf\u4eba\u5de5\u786e\u8ba4\u8fdb\u5ea6"}</strong>
+      <span>{`${batchStatusLabel(report.status)} \u00b7 \u76ee\u6807 ${report.targetCount} \u00b7 \u5df2\u586b\u5165 ${report.filled} \u00b7 \u5931\u8d25 ${report.failed} \u00b7 \u963b\u65ad ${report.blocked}`}</span>
+      <span>{`${report.intervalMinSeconds}-${report.intervalMaxSeconds}s \u95f4\u9694 \u00b7 \u961f\u5217 ${report.queueSize}`}</span>
+      {report.pauseReason ? <code>{report.pauseReason}</code> : null}
+      {report.nextAllowedAt ? <code>{`\u4e0b\u6b21\u6700\u65e9\u7ee7\u7eed\uff1a${new Date(report.nextAllowedAt).toLocaleString()}`}</code> : null}
+      <div className="selectorGroup nestedDiagnostics">
+        <span>{"\u6700\u8fd1\u8bb0\u5f55"}</span>
+        {report.records.length === 0 ? <code>{"\u6682\u65e0\u6279\u91cf\u8bb0\u5f55"}</code> : null}
+        {report.records.slice(-5).reverse().map((record) => (
+          <code key={`${record.at}-${record.item.externalKey}`}>
+            {`${new Date(record.at).toLocaleTimeString()} \u00b7 ${record.status} \u00b7 ${record.item.displayName || "\u5019\u9009\u4eba"}${record.errorMessage ? ` \u00b7 ${record.errorMessage}` : ""}`}
+          </code>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function batchStatusLabel(status: GreetingBatchState["status"]) {
+  if (status === "running") return "\u8fd0\u884c\u4e2d";
+  if (status === "waiting_confirmation") return "\u7b49\u5f85\u4eba\u5de5\u786e\u8ba4";
+  if (status === "waiting_interval") return "\u7b49\u5f85\u95f4\u9694";
+  if (status === "paused") return "\u5df2\u6682\u505c";
+  if (status === "completed") return "\u5df2\u5b8c\u6210";
+  if (status === "blocked") return "\u5df2\u963b\u65ad";
+  return status;
 }
 
 function ExtensionFilterDiagnosticsBox({ diagnostics }: { diagnostics: ExtensionFilterDiagnosticsReport }) {

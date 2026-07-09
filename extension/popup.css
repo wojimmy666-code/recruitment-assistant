@@ -66,3 +66,33 @@ code {
   background: #fff;
   padding: 6px;
 }
+
+.batchControls {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #dce4e0;
+  border-radius: 6px;
+  background: #fff;
+  padding: 8px;
+}
+
+.batchControls label {
+  display: grid;
+  gap: 4px;
+  color: #60716a;
+  font-size: 12px;
+}
+
+.batchControls input {
+  min-height: 30px;
+  border: 1px solid #cad6d1;
+  border-radius: 5px;
+  padding: 0 8px;
+  font: inherit;
+}
+
+.inlineInputs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}

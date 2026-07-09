@@ -205,6 +205,38 @@ export type GreetingTestReport = {
   clickResult: GreetingActionResult;
   composerResult: GreetingActionResult;
 };
+
+export type GreetingBatchRecord = {
+  at: string;
+  status: string;
+  errorMessage: string;
+  item: RecommendQueueItem;
+  messagePreview: string;
+  clickResult: GreetingActionResult;
+  composerResult: GreetingActionResult;
+};
+
+export type GreetingBatchState = {
+  id: string;
+  status: "running" | "waiting_confirmation" | "waiting_interval" | "paused" | "completed" | "blocked";
+  mode: "manual_confirm";
+  targetCount: number;
+  intervalMinSeconds: number;
+  intervalMaxSeconds: number;
+  startedAt: string;
+  updatedAt: string;
+  nextAllowedAt: string;
+  pauseReason: string;
+  queueSize: number;
+  selectedJobText: string;
+  sourceUrl: string;
+  attempted: number;
+  filled: number;
+  failed: number;
+  blocked: number;
+  skipped: number;
+  records: GreetingBatchRecord[];
+};
 export type SendLog = {
   id: number;
   candidate_key: string;
@@ -284,6 +316,10 @@ export async function getRecommendQueue() {
 
 export async function getGreetingTest() {
   return request<GreetingTestReport | null>("/api/extension/greeting-test");
+}
+
+export async function getGreetingBatch() {
+  return request<GreetingBatchState | null>("/api/extension/greeting-batch");
 }
 
 export async function getCandidates(jobId?: number) {
