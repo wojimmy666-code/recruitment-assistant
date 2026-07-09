@@ -5,14 +5,17 @@
 }
 
 body {
-  width: 320px;
+  width: 360px;
   margin: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 main {
   display: grid;
   gap: 10px;
-  padding: 14px;
+  box-sizing: border-box;
+  padding: 14px 24px 14px 14px;
 }
 
 h1,
@@ -32,6 +35,8 @@ p,
 }
 
 button {
+  box-sizing: border-box;
+  width: 100%;
   min-height: 38px;
   border: 1px solid #16815f;
   border-radius: 6px;
@@ -84,6 +89,8 @@ code {
 }
 
 .batchControls input {
+  box-sizing: border-box;
+  width: 100%;
   min-height: 30px;
   border: 1px solid #cad6d1;
   border-radius: 5px;

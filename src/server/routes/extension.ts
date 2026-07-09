@@ -383,7 +383,7 @@ function normalizeGreetingBatchRecord(input: unknown, pageUrl: string): Extensio
   const composerResult = normalizeGreetingActionResult(record.composerResult);
   const blockedReason = composerResult.blockedReason || clickResult.blockedReason;
   const status = blockedReason ? "blocked" : composerResult.inputSelector && composerResult.filled ? "filled" : "failed";
-  const errorMessage = blockedReason || composerResult.reason || clickResult.reason || "";
+  const errorMessage = blockedReason || composerResult.reason || clickResult.reason || deriveGreetingBatchError(clickResult, composerResult);
 
   return {
     at: new Date().toISOString(),
@@ -394,6 +394,13 @@ function normalizeGreetingBatchRecord(input: unknown, pageUrl: string): Extensio
     clickResult,
     composerResult
   };
+}
+
+function deriveGreetingBatchError(clickResult: ExtensionGreetingActionResult, composerResult: ExtensionGreetingActionResult) {
+  if (!clickResult.clicked) return "??????????";
+  if (!composerResult.inputSelector) return "??????????????????";
+  if (!composerResult.filled) return "??????????????????";
+  return "";
 }
 
 function applyGreetingBatchRecord(record: ExtensionGreetingBatchRecord) {

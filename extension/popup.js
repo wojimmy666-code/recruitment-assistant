@@ -194,7 +194,7 @@ async function runSingleGreetingTest() {
 
     const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const inspectTabId = activeTab?.id && activeTab.url?.includes("zhipin.com") ? activeTab.id : tab.id;
-    const composerResult = await inspectGreetingComposerInTab(inspectTabId, context.message);
+    const composerResult = await waitForGreetingComposerInTab(inspectTabId, context.message);
 
     const response = await fetch(`${localBaseUrl}/api/extension/greeting-test`, {
       method: "POST",
@@ -274,6 +274,30 @@ async function clickGreetingInTab(tabId, item) {
   const clicked = results.find((result) => result.ok && result.clicked);
   if (clicked) return clicked;
   throw new Error(buildGreetingFrameError(results, "\u6ca1\u6709\u5728\u5f53\u524d BOSS \u9875\u9762\u70b9\u51fb\u5230\u6253\u62db\u547c\u6309\u94ae\u3002"));
+}
+
+async function waitForGreetingComposerInTab(tabId, message, timeoutMs = 9000) {
+  const startedAt = Date.now();
+  let latest = null;
+  while (Date.now() - startedAt <= timeoutMs) {
+    latest = await inspectGreetingComposerInTab(tabId, message);
+    if (latest.blockedReason || (latest.inputSelector && latest.filled)) return latest;
+    await sleep(700);
+  }
+  return normalizeComposerFailure(latest);
+}
+
+function normalizeComposerFailure(result) {
+  if (!result) {
+    return { ok: false, reason: "\u672a\u8bc6\u522b\u5230\u6253\u62db\u547c\u8f93\u5165\u533a\uff1a\u6ca1\u6709\u53ef\u7528 frame \u8fd4\u56de\u7ed3\u679c\u3002" };
+  }
+  if (!result.blockedReason && !result.inputSelector && !result.reason) {
+    return { ...result, reason: "\u672a\u8bc6\u522b\u5230\u6253\u62db\u547c\u8f93\u5165\u6846\uff0c\u53ef\u80fd\u672a\u8fdb\u5165\u6c9f\u901a\u9875\u6216 BOSS \u9875\u9762\u8fd8\u672a\u52a0\u8f7d\u5b8c\u3002" };
+  }
+  if (result.inputSelector && !result.filled && !result.reason) {
+    return { ...result, reason: "\u5df2\u8bc6\u522b\u5230\u8f93\u5165\u6846\uff0c\u4f46\u6587\u6848\u672a\u6210\u529f\u5199\u5165\u3002" };
+  }
+  return result;
 }
 
 async function inspectGreetingComposerInTab(tabId, message) {
@@ -361,7 +385,7 @@ async function runGreetingBatchStep({ startNew }) {
 
     const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const inspectTabId = activeTab?.id && activeTab.url?.includes("zhipin.com") ? activeTab.id : tab.id;
-    const composerResult = await inspectGreetingComposerInTab(inspectTabId, message);
+    const composerResult = await waitForGreetingComposerInTab(inspectTabId, message);
 
     const recordResponse = await fetch(`${localBaseUrl}/api/extension/greeting-batch/record`, {
       method: "POST",

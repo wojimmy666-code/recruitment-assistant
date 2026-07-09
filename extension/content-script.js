@@ -1128,16 +1128,19 @@ function scoreControlByHint(element, pattern) {
 
 function setControlValue(element, value) {
   element.focus();
-  if (element.isContentEditable) {
+  if (element.isContentEditable || element.getAttribute("contenteditable") !== null) {
     element.textContent = value;
-  } else {
+  } else if ("value" in element) {
     const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     const descriptor = Object.getOwnPropertyDescriptor(prototype, "value");
     descriptor?.set?.call(element, value);
     if (element.value !== value) element.value = value;
+  } else {
+    element.textContent = value;
   }
   element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
   element.dispatchEvent(new Event("change", { bubbles: true }));
+  element.dispatchEvent(new KeyboardEvent("keyup", { key: "Process", bubbles: true }));
 }
 
 function readControlValue(element) {
@@ -1405,11 +1408,14 @@ function inspectGreetingComposer(options = {}) {
     filled = looseTextIncludes(readControlValue(input), message) || looseTextIncludes(input.textContent || "", message);
   }
 
+  const reason = greetingComposerReason({ blockedReason, input, filled, message });
+
   return {
     ok: true,
     href: location.href,
     path: location.pathname,
     title: document.title,
+    reason,
     blockedReason,
     inputSelector: input ? diagnosticSelector(input) : "",
     inputText: input ? truncateDiagnosticText(controlTextForDiagnostics(input), 80) : "",
@@ -1422,6 +1428,13 @@ function inspectGreetingComposer(options = {}) {
     messagePreview: message.slice(0, 120),
     bodyTextLength: normalizeText(document.body?.textContent || "").length
   };
+}
+
+function greetingComposerReason({ blockedReason, input, filled, message }) {
+  if (blockedReason) return blockedReason;
+  if (!input) return "\u672a\u8bc6\u522b\u5230\u6253\u62db\u547c\u8f93\u5165\u6846\u3002";
+  if (message && !filled) return "\u5df2\u8bc6\u522b\u5230\u8f93\u5165\u6846\uff0c\u4f46\u6587\u6848\u672a\u6210\u529f\u5199\u5165\u3002";
+  return "";
 }
 
 function findRecommendQueueCardByCandidate(candidate) {
@@ -1466,12 +1479,16 @@ function recommendQueueCandidateMatches(candidate, cardInfo) {
 }
 
 function findGreetingInputControl() {
-  return visibleControlElements("textarea, input, [contenteditable=\"true\"], [role=\"textbox\"], div[class*=\"input\"], div[class*=\"editor\"], div[class*=\"textarea\"]")
+  return greetingInputCandidates()[0]?.element || null;
+}
+
+function greetingInputCandidates() {
+  return visibleControlElements("textarea, input, [contenteditable], [role=\"textbox\"], [aria-multiline=\"true\"]")
     .filter((element) => !isDisabled(element))
     .filter((element) => isPotentialGreetingInput(element))
     .map((element) => ({ element, score: scoreGreetingInput(element) }))
     .filter((item) => item.score > 0)
-    .sort((a, b) => b.score - a.score || elementArea(a.element) - elementArea(b.element))[0]?.element || null;
+    .sort((a, b) => b.score - a.score || elementArea(a.element) - elementArea(b.element));
 }
 
 function isPotentialGreetingInput(element) {
@@ -1482,7 +1499,7 @@ function isPotentialGreetingInput(element) {
   }
   const hint = greetingControlHint(element);
   if (/\u641c\u7d22|\u7b5b\u9009|\u57ce\u5e02|\u5730\u533a|\u85aa\u8d44|\u5173\u952e\u8bcd/.test(hint)) return false;
-  return element.isContentEditable || element.getAttribute("role") === "textbox" || /TEXTAREA|INPUT/.test(tag) || /input|editor|textarea/i.test(String(element.className || ""));
+  return element.isContentEditable || element.getAttribute("contenteditable") !== null || element.getAttribute("role") === "textbox" || element.getAttribute("aria-multiline") === "true" || /TEXTAREA|INPUT/.test(tag);
 }
 
 function scoreGreetingInput(element) {
