@@ -213,7 +213,7 @@ function GreetingBatchBox({ report }: { report: GreetingBatchState }) {
   return (
     <div className="diagnosticsBox greetingBatchBox">
       <strong>{"\u6279\u91cf\u4eba\u5de5\u786e\u8ba4\u8fdb\u5ea6"}</strong>
-      <span>{`${batchStatusLabel(report.status)} \u00b7 \u76ee\u6807 ${report.targetCount} \u00b7 \u5df2\u586b\u5165 ${report.filled} \u00b7 \u5931\u8d25 ${report.failed} \u00b7 \u963b\u65ad ${report.blocked}`}</span>
+      <span>{`${batchStatusLabel(report.status)} \u00b7 \u76ee\u6807 ${report.targetCount} \u00b7 \u5df2\u586b\u5165 ${report.filled} \u00b7 \u5931\u8d25 ${report.failed} \u00b7 \u8df3\u8fc7 ${report.skipped} \u00b7 \u963b\u65ad ${report.blocked}`}</span>
       <span>{`${report.intervalMinSeconds}-${report.intervalMaxSeconds}s \u95f4\u9694 \u00b7 \u961f\u5217 ${report.queueSize}`}</span>
       {report.pauseReason ? <code>{report.pauseReason}</code> : null}
       {report.nextAllowedAt ? <code>{`\u4e0b\u6b21\u6700\u65e9\u7ee7\u7eed\uff1a${new Date(report.nextAllowedAt).toLocaleString()}`}</code> : null}
@@ -251,7 +251,7 @@ function GreetingComposerDiagnosticsBox({ record }: { record: GreetingBatchState
 }
 
 function recordStatusLabel(status: string) {
-  if (status === "clicked_no_composer") return "\u5df2\u70b9\u51fb\u65e0\u7f16\u8f91\u5668";
+  if (status === "clicked_no_composer") return "\u63a8\u8350\u9875\u65e0\u7f16\u8f91\u5668";
   if (status === "filled") return "\u5df2\u586b\u5165";
   if (status === "failed") return "\u5931\u8d25";
   if (status === "blocked") return "\u963b\u65ad";

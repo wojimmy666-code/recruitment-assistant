@@ -416,12 +416,23 @@ function deriveGreetingBatchErrorMessage(
 function deriveGreetingBatchStatus(clickResult: ExtensionGreetingActionResult, composerResult: ExtensionGreetingActionResult, blockedReason: string) {
   if (blockedReason) return "blocked";
   if (composerResult.inputSelector && composerResult.filled) return "filled";
-  if (clickResult.clicked && isRecommendFrameWithoutComposer(composerResult)) return "clicked_no_composer";
+  if (isRecommendFrameWithoutComposer(composerResult) && hasRecommendGreetingEvidence(clickResult, composerResult)) return "clicked_no_composer";
   return "failed";
 }
 
 function isRecommendFrameWithoutComposer(composerResult: ExtensionGreetingActionResult) {
   return !composerResult.inputSelector && (composerResult.path.includes("/web/frame/recommend") || composerResult.path.includes("/web/chat/recommend"));
+}
+
+function hasRecommendGreetingEvidence(clickResult: ExtensionGreetingActionResult, composerResult: ExtensionGreetingActionResult) {
+  const hints = composerResult.diagnostics.textHints.join(" ");
+  return Boolean(
+    clickResult.clicked ||
+    clickResult.greetingButtonSelector ||
+    clickResult.greetingButtonText ||
+    composerResult.diagnostics.sendCandidates.length > 0 ||
+    /\u6253\s*\u62db\s*\u547c/.test(hints)
+  );
 }
 
 function normalizeGreetingComposerDiagnostics(input: unknown): ExtensionGreetingComposerDiagnostics {
@@ -434,8 +445,8 @@ function normalizeGreetingComposerDiagnostics(input: unknown): ExtensionGreeting
 }
 
 function deriveGreetingBatchError(clickResult: ExtensionGreetingActionResult, composerResult: ExtensionGreetingActionResult) {
+  if (isRecommendFrameWithoutComposer(composerResult) && hasRecommendGreetingEvidence(clickResult, composerResult)) return "\u63a8\u8350\u9875\u6253\u62db\u547c\u540e\u672a\u6253\u5f00\u6d88\u606f\u8f93\u5165\u6846\uff1b\u8be5\u6309\u94ae\u53ef\u80fd\u662f\u76f4\u63a5\u6253\u62db\u547c\u52a8\u4f5c\uff0c\u5df2\u6682\u505c\u907f\u514d\u7ee7\u7eed\u8bef\u70b9\u3002";
   if (!clickResult.clicked) return "\u672a\u70b9\u51fb\u5230\u6253\u62db\u547c\u6309\u94ae\u3002";
-  if (clickResult.clicked && isRecommendFrameWithoutComposer(composerResult)) return "\u5df2\u70b9\u51fb\u63a8\u8350\u9875\u6253\u62db\u547c\uff0c\u4f46\u9875\u9762\u672a\u6253\u5f00\u6d88\u606f\u8f93\u5165\u6846\uff1b\u8be5\u6309\u94ae\u53ef\u80fd\u662f\u76f4\u63a5\u6253\u62db\u547c\u52a8\u4f5c\uff0c\u5df2\u6682\u505c\u907f\u514d\u7ee7\u7eed\u8bef\u70b9\u3002";
   if (!composerResult.inputSelector) return "\u5df2\u70b9\u51fb\u6253\u62db\u547c\uff0c\u4f46\u672a\u8bc6\u522b\u5230\u6d88\u606f\u8f93\u5165\u6846\u3002";
   if (!composerResult.filled) return "\u5df2\u8bc6\u522b\u6d88\u606f\u8f93\u5165\u6846\uff0c\u4f46\u6587\u6848\u672a\u6210\u529f\u5199\u5165\u3002";
   return "";

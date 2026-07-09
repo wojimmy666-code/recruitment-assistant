@@ -436,11 +436,8 @@ async function runGreetingBatchStep({ startNew }) {
     const recordPayload = await recordResponse.json();
     if (!recordResponse.ok) throw new Error(recordPayload.error || "\u4e0a\u62a5\u6279\u91cf\u8bb0\u5f55\u5931\u8d25\u3002");
 
-    statusEl.textContent = composerResult.blockedReason
-      ? `\u6279\u91cf\u5df2\u505c\u6b62\uff1a${composerResult.blockedReason}`
-      : composerResult.inputSelector
-        ? "\u5df2\u586b\u5165\u6587\u6848\uff0c\u8bf7\u4eba\u5de5\u786e\u8ba4\u53d1\u9001\uff0c\u8fd4\u56de\u63a8\u8350\u9875\u540e\u70b9\u7ee7\u7eed\u4e0b\u4e00\u4e2a\u3002"
-        : "\u672a\u8bc6\u522b\u5230\u8f93\u5165\u6846\uff0c\u6279\u91cf\u5df2\u6682\u505c\u3002";
+    const latestRecord = recordPayload.batch?.records?.at?.(-1);
+    statusEl.textContent = greetingBatchStepStatusText(recordPayload.batch, latestRecord, composerResult);
     renderGreetingBatchResult(recordPayload.batch);
   } catch (error) {
     statusEl.textContent = error instanceof Error ? error.message : String(error);
@@ -514,6 +511,14 @@ function numberInputValue(input, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function greetingBatchStepStatusText(batch, record, composerResult) {
+  if (record?.status === "clicked_no_composer") return record.errorMessage || "\u63a8\u8350\u9875\u6253\u62db\u547c\u540e\u672a\u6253\u5f00\u8f93\u5165\u6846\uff0c\u5df2\u6682\u505c\u3002";
+  if (record?.status === "blocked") return `\u6279\u91cf\u5df2\u505c\u6b62\uff1a${record.errorMessage || batch?.pauseReason || "blocked"}`;
+  if (record?.status === "failed") return `\u6279\u91cf\u5904\u7406\u5931\u8d25\uff1a${record.errorMessage || "failed"}`;
+  if (record?.status === "filled" || composerResult?.inputSelector) return "\u5df2\u586b\u5165\u6587\u6848\uff0c\u8bf7\u4eba\u5de5\u786e\u8ba4\u53d1\u9001\uff0c\u8fd4\u56de\u63a8\u8350\u9875\u540e\u70b9\u7ee7\u7eed\u4e0b\u4e00\u4e2a\u3002";
+  if (composerResult?.blockedReason) return `\u6279\u91cf\u5df2\u505c\u6b62\uff1a${composerResult.blockedReason}`;
+  return batch?.pauseReason || "\u6279\u91cf\u5df2\u6682\u505c\u3002";
+}
 function batchDoneText(batch) {
   if (!batch) return "\u6279\u91cf\u72b6\u6001\u672a\u77e5\u3002";
   if (batch.status === "completed") return "\u6279\u91cf\u5df2\u5b8c\u6210\u3002";
@@ -773,7 +778,7 @@ function renderGreetingBatchResult(batch) {
   if (!batch) return;
 
   const summary = document.createElement("p");
-  summary.textContent = `\u6279\u91cf ${batch.status} \u00b7 \u76ee\u6807 ${batch.targetCount} \u00b7 \u5df2\u586b\u5165 ${batch.filled} \u00b7 \u5931\u8d25 ${batch.failed} \u00b7 \u963b\u65ad ${batch.blocked}`;
+  summary.textContent = `\u6279\u91cf ${batchStateLabel(batch.status)} \u00b7 \u76ee\u6807 ${batch.targetCount} \u00b7 \u5df2\u586b\u5165 ${batch.filled} \u00b7 \u5931\u8d25 ${batch.failed} \u00b7 \u8df3\u8fc7 ${batch.skipped || 0} \u00b7 \u963b\u65ad ${batch.blocked}`;
   resultEl.append(summary);
 
   if (batch.pauseReason) {
@@ -797,8 +802,17 @@ function renderGreetingBatchResult(batch) {
   appendComposerDiagnostics(batch.records?.at?.(-1));
 }
 
+function batchStateLabel(status) {
+  if (status === "running") return "\u8fd0\u884c\u4e2d";
+  if (status === "waiting_confirmation") return "\u7b49\u5f85\u4eba\u5de5\u786e\u8ba4";
+  if (status === "waiting_interval") return "\u7b49\u5f85\u95f4\u9694";
+  if (status === "paused") return "\u5df2\u6682\u505c";
+  if (status === "completed") return "\u5df2\u5b8c\u6210";
+  if (status === "blocked") return "\u5df2\u963b\u65ad";
+  return status;
+}
 function batchRecordStatusLabel(status) {
-  if (status === "clicked_no_composer") return "\u5df2\u70b9\u51fb\u65e0\u7f16\u8f91\u5668";
+  if (status === "clicked_no_composer") return "\u63a8\u8350\u9875\u65e0\u7f16\u8f91\u5668";
   if (status === "filled") return "\u5df2\u586b\u5165";
   if (status === "failed") return "\u5931\u8d25";
   if (status === "blocked") return "\u963b\u65ad";
