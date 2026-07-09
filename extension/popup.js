@@ -194,7 +194,7 @@ async function runSingleGreetingTest() {
 
     const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const inspectTabId = activeTab?.id && activeTab.url?.includes("zhipin.com") ? activeTab.id : tab.id;
-    const composerResult = await waitForGreetingComposerInTab(inspectTabId, context.message);
+    const composerResult = await waitForGreetingComposerAcrossTabs(inspectTabId, context.message);
 
     const response = await fetch(`${localBaseUrl}/api/extension/greeting-test`, {
       method: "POST",
@@ -274,6 +274,42 @@ async function clickGreetingInTab(tabId, item) {
   const clicked = results.find((result) => result.ok && result.clicked);
   if (clicked) return clicked;
   throw new Error(buildGreetingFrameError(results, "\u6ca1\u6709\u5728\u5f53\u524d BOSS \u9875\u9762\u70b9\u51fb\u5230\u6253\u62db\u547c\u6309\u94ae\u3002"));
+}
+
+async function waitForGreetingComposerAcrossTabs(preferredTabId, message, timeoutMs = 10000) {
+  const startedAt = Date.now();
+  let latest = null;
+  while (Date.now() - startedAt <= timeoutMs) {
+    const tabs = await getInspectableBossTabs(preferredTabId);
+    for (const candidateTab of tabs) {
+      latest = await inspectGreetingComposerInTab(candidateTab.id, message);
+      latest = { ...latest, tabId: candidateTab.id, tabUrl: candidateTab.url || "", tabTitle: candidateTab.title || "" };
+      if (latest.blockedReason || (latest.inputSelector && latest.filled)) return latest;
+    }
+    await sleep(700);
+  }
+  return normalizeComposerFailure(latest);
+}
+
+async function getInspectableBossTabs(preferredTabId) {
+  const tabs = await chrome.tabs.query({ currentWindow: true });
+  return tabs
+    .filter((tab) => tab.id && tab.url?.includes("zhipin.com"))
+    .sort((a, b) => {
+      const preferred = Number(b.id === preferredTabId) - Number(a.id === preferredTabId);
+      if (preferred) return preferred;
+      const active = Number(Boolean(b.active)) - Number(Boolean(a.active));
+      if (active) return active;
+      return tabGreetingPriority(b.url) - tabGreetingPriority(a.url);
+    });
+}
+
+function tabGreetingPriority(url = "") {
+  if (url.includes("/web/chat/index") || url.includes("/web/chat/im")) return 5;
+  if (url.includes("/web/frame/c-resume") || url.includes("/web/frame/chat")) return 4;
+  if (url.includes("/web/chat")) return 3;
+  if (url.includes("/web/frame/recommend")) return 2;
+  return 0;
 }
 
 async function waitForGreetingComposerInTab(tabId, message, timeoutMs = 9000) {
@@ -385,7 +421,7 @@ async function runGreetingBatchStep({ startNew }) {
 
     const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const inspectTabId = activeTab?.id && activeTab.url?.includes("zhipin.com") ? activeTab.id : tab.id;
-    const composerResult = await waitForGreetingComposerInTab(inspectTabId, message);
+    const composerResult = await waitForGreetingComposerAcrossTabs(inspectTabId, message);
 
     const recordResponse = await fetch(`${localBaseUrl}/api/extension/greeting-batch/record`, {
       method: "POST",
@@ -755,6 +791,23 @@ function renderGreetingBatchResult(batch) {
   for (const record of (batch.records || []).slice(-4).reverse()) {
     const row = document.createElement("code");
     row.textContent = `${record.status} \u00b7 ${record.item?.displayName || "\u5019\u9009\u4eba"} \u00b7 ${record.errorMessage || record.composerResult?.inputSelector || ""}`;
+    resultEl.append(row);
+  }
+
+  appendComposerDiagnostics(batch.records?.at?.(-1));
+}
+
+function appendComposerDiagnostics(record) {
+  const diagnostics = record?.composerResult?.diagnostics;
+  if (!diagnostics) return;
+  const lines = [];
+  if (record.composerResult?.path) lines.push(`frame: ${record.composerResult.path}`);
+  if (diagnostics.textHints?.length) lines.push(`hints: ${diagnostics.textHints.slice(0, 5).join(" / ")}`);
+  if (diagnostics.inputCandidates?.length) lines.push(`input candidates: ${diagnostics.inputCandidates.slice(0, 3).map((item) => item.selector || item.path || item.tag).join(" | ")}`);
+  if (diagnostics.sendCandidates?.length) lines.push(`send candidates: ${diagnostics.sendCandidates.slice(0, 3).map((item) => item.selector || item.path || item.tag).join(" | ")}`);
+  for (const line of lines) {
+    const row = document.createElement("code");
+    row.textContent = line;
     resultEl.append(row);
   }
 }

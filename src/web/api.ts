@@ -167,6 +167,12 @@ export type RecommendQueueReport = {
   };
 };
 
+
+export type GreetingComposerDiagnostics = {
+  inputCandidates: ExtensionFilterDiagnosticElement[];
+  sendCandidates: ExtensionFilterDiagnosticElement[];
+  textHints: string[];
+};
 export type GreetingActionResult = {
   ok: boolean;
   clicked: boolean;
@@ -194,6 +200,7 @@ export type GreetingActionResult = {
   sendSuppressed: boolean;
   messagePreview: string;
   bodyTextLength: number;
+  diagnostics: GreetingComposerDiagnostics;
 };
 
 export type GreetingTestReport = {

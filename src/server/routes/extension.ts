@@ -88,6 +88,12 @@ type ExtensionRecommendQueueItem = {
 };
 
 
+
+type ExtensionGreetingComposerDiagnostics = {
+  inputCandidates: ExtensionFilterDiagnosticElement[];
+  sendCandidates: ExtensionFilterDiagnosticElement[];
+  textHints: string[];
+};
 type ExtensionGreetingActionResult = {
   ok: boolean;
   clicked: boolean;
@@ -115,6 +121,7 @@ type ExtensionGreetingActionResult = {
   sendSuppressed: boolean;
   messagePreview: string;
   bodyTextLength: number;
+  diagnostics: ExtensionGreetingComposerDiagnostics;
 };
 
 type ExtensionGreetingTestReport = {
@@ -396,6 +403,15 @@ function normalizeGreetingBatchRecord(input: unknown, pageUrl: string): Extensio
   };
 }
 
+function normalizeGreetingComposerDiagnostics(input: unknown): ExtensionGreetingComposerDiagnostics {
+  const record = toRecord(input);
+  return {
+    inputCandidates: normalizeDiagnosticElements(record.inputCandidates, 12),
+    sendCandidates: normalizeDiagnosticElements(record.sendCandidates, 12),
+    textHints: normalizeStringArray(record.textHints, 40, 120)
+  };
+}
+
 function deriveGreetingBatchError(clickResult: ExtensionGreetingActionResult, composerResult: ExtensionGreetingActionResult) {
   if (!clickResult.clicked) return "??????????";
   if (!composerResult.inputSelector) return "??????????????????";
@@ -547,7 +563,8 @@ function normalizeGreetingActionResult(input: unknown): ExtensionGreetingActionR
     sent: Boolean(record.sent),
     sendSuppressed: Boolean(record.sendSuppressed),
     messagePreview: truncateText(String(record.messagePreview || ""), 160),
-    bodyTextLength: toFiniteNumber(record.bodyTextLength)
+    bodyTextLength: toFiniteNumber(record.bodyTextLength),
+    diagnostics: normalizeGreetingComposerDiagnostics(record.diagnostics)
   };
 }
 

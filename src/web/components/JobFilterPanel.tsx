@@ -208,6 +208,8 @@ function GreetingTestBox({ report }: { report: GreetingTestReport }) {
 }
 
 function GreetingBatchBox({ report }: { report: GreetingBatchState }) {
+  const latestBatchRecord = report.records.at(-1);
+
   return (
     <div className="diagnosticsBox greetingBatchBox">
       <strong>{"\u6279\u91cf\u4eba\u5de5\u786e\u8ba4\u8fdb\u5ea6"}</strong>
@@ -215,6 +217,7 @@ function GreetingBatchBox({ report }: { report: GreetingBatchState }) {
       <span>{`${report.intervalMinSeconds}-${report.intervalMaxSeconds}s \u95f4\u9694 \u00b7 \u961f\u5217 ${report.queueSize}`}</span>
       {report.pauseReason ? <code>{report.pauseReason}</code> : null}
       {report.nextAllowedAt ? <code>{`\u4e0b\u6b21\u6700\u65e9\u7ee7\u7eed\uff1a${new Date(report.nextAllowedAt).toLocaleString()}`}</code> : null}
+      {latestBatchRecord ? <GreetingComposerDiagnosticsBox record={latestBatchRecord} /> : null}
       <div className="selectorGroup nestedDiagnostics">
         <span>{"\u6700\u8fd1\u8bb0\u5f55"}</span>
         {report.records.length === 0 ? <code>{"\u6682\u65e0\u6279\u91cf\u8bb0\u5f55"}</code> : null}
@@ -224,6 +227,25 @@ function GreetingBatchBox({ report }: { report: GreetingBatchState }) {
           </code>
         ))}
       </div>
+    </div>
+  );
+}
+
+function GreetingComposerDiagnosticsBox({ record }: { record: GreetingBatchState["records"][number] }) {
+  const diagnostics = record.composerResult.diagnostics;
+  if (!diagnostics) return null;
+
+  return (
+    <div className="selectorGroup nestedDiagnostics">
+      <span>{"\u6700\u8fd1\u8f93\u5165\u533a\u8bca\u65ad"}</span>
+      <code>{`${record.composerResult.path || "frame"} \u00b7 \u9875\u9762\u6587\u672c ${record.composerResult.bodyTextLength}`}</code>
+      {diagnostics.textHints.length ? <code>{`\u63d0\u793a\u6587\u6848\uff1a${diagnostics.textHints.slice(0, 8).join("\uff0c")}`}</code> : null}
+      {diagnostics.inputCandidates.length ? (
+        <code>{`\u8f93\u5165\u6846\u5019\u9009\uff1a${diagnostics.inputCandidates.slice(0, 3).map((item) => item.selector || item.path || item.tag).join(" | ")}`}</code>
+      ) : (
+        <code>{"\u8f93\u5165\u6846\u5019\u9009\uff1a\u672a\u547d\u4e2d"}</code>
+      )}
+      {diagnostics.sendCandidates.length ? <code>{`\u53d1\u9001\u6309\u94ae\u5019\u9009\uff1a${diagnostics.sendCandidates.slice(0, 3).map((item) => item.selector || item.path || item.tag).join(" | ")}`}</code> : null}
     </div>
   );
 }

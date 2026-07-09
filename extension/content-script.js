@@ -1409,6 +1409,7 @@ function inspectGreetingComposer(options = {}) {
   }
 
   const reason = greetingComposerReason({ blockedReason, input, filled, message });
+  const diagnostics = collectGreetingComposerDiagnostics();
 
   return {
     ok: true,
@@ -1426,8 +1427,44 @@ function inspectGreetingComposer(options = {}) {
     sent: false,
     sendSuppressed: true,
     messagePreview: message.slice(0, 120),
-    bodyTextLength: normalizeText(document.body?.textContent || "").length
+    bodyTextLength: normalizeText(document.body?.textContent || "").length,
+    diagnostics
   };
+}
+
+function collectGreetingComposerDiagnostics() {
+  return {
+    inputCandidates: greetingInputDiagnosticCandidates().slice(0, 8).map((item) => ({ ...inspectElementForDiagnostics(item.element), score: item.score })),
+    sendCandidates: greetingSendCandidates().slice(0, 8).map((element) => inspectElementForDiagnostics(element)),
+    textHints: collectGreetingTextHints()
+  };
+}
+
+function greetingInputDiagnosticCandidates() {
+  const selectors = "textarea, input, [contenteditable], [role=\"textbox\"], [aria-multiline=\"true\"], div[class*=\"input\"], div[class*=\"editor\"], div[class*=\"textarea\"], div[class*=\"message\"], div[class*=\"chat\"]";
+  const seen = new Set();
+  return visibleControlElements(selectors)
+    .filter((element) => !isDisabled(element))
+    .filter((element) => {
+      if (seen.has(element)) return false;
+      seen.add(element);
+      return true;
+    })
+    .map((element) => ({ element, score: scoreGreetingInput(element) }))
+    .filter((item) => item.score > 0 || /\u8f93\u5165|\u6d88\u606f|\u56de\u590d|\u6c9f\u901a|chat|message|editor|textarea|input/i.test(greetingControlHint(item.element)))
+    .sort((a, b) => b.score - a.score || elementArea(a.element) - elementArea(b.element));
+}
+
+function collectGreetingTextHints() {
+  const hints = [];
+  for (const element of visibleControlElements("button, a, span, div, textarea, input, [contenteditable], [role=\"button\"], [role=\"textbox\"]")) {
+    const text = controlTextForDiagnostics(element);
+    if (!text || text.length > 100) continue;
+    if (!/\u53d1\u9001|\u8f93\u5165|\u6d88\u606f|\u56de\u590d|\u6c9f\u901a|\u6253\u62db\u547c|\u9891\u7e41|\u9a8c\u8bc1|\u767b\u5f55|chat|message|send|reply/i.test(text)) continue;
+    if (!hints.includes(text)) hints.push(text);
+    if (hints.length >= 30) break;
+  }
+  return hints;
 }
 
 function greetingComposerReason({ blockedReason, input, filled, message }) {
@@ -1527,11 +1564,16 @@ function greetingControlHint(element) {
 }
 
 function findGreetingSendControl() {
+  return greetingSendCandidates()[0] || null;
+}
+
+function greetingSendCandidates() {
   return visibleControlElements("button, a, span, div, [role=\"button\"], input[type=\"button\"], input[type=\"submit\"]")
     .filter((element) => !isDisabled(element))
     .map((element) => ({ element, text: textFromClickable(element) }))
     .filter((item) => item.text && item.text.length <= 20 && /^(\u53d1\u9001|\u786e\u8ba4\u53d1\u9001|\u7acb\u5373\u6c9f\u901a|\u5f00\u59cb\u6c9f\u901a|\u6253\u62db\u547c)$/.test(item.text))
-    .sort((a, b) => elementArea(a.element) - elementArea(b.element))[0]?.element || null;
+    .sort((a, b) => elementArea(a.element) - elementArea(b.element))
+    .map((item) => item.element);
 }
 
 function detectGreetingBlockedReason() {
