@@ -1,0 +1,32 @@
+﻿{
+    "manifest_version":  3,
+    "name":  "Recruitment Assistant Bridge",
+    "version":  "0.1.0",
+    "description":  "Bridge logged-in BOSS pages to the local recruitment assistant.",
+    "action":  {
+                   "default_popup":  "popup.html",
+                   "default_title":  "Recruitment Assistant"
+               },
+    "permissions":  [
+                        "activeTab",
+                        "tabs",
+                        "scripting",
+                        "webNavigation"
+                    ],
+    "host_permissions":  [
+                             "https://www.zhipin.com/*",
+                             "http://localhost:3000/*"
+                         ],
+    "content_scripts":  [
+                            {
+                                "matches":  [
+                                                "https://www.zhipin.com/*"
+                                            ],
+                                "js":  [
+                                           "content-script.js"
+                                       ],
+                                "run_at":  "document_idle",
+                                "all_frames":  true
+                            }
+                        ]
+}

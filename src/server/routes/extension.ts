@@ -1,0 +1,377 @@
+import { Router } from "express";
+import type { AppDatabase } from "../db";
+import { getDefaultJob } from "../db";
+import type { AdapterCandidate } from "../domain";
+import { eventHub } from "../runtime";
+import { hasCandidateEvidence, isFalseCandidateText, saveCandidatesForJob } from "../services/candidate-service";
+import { asyncHandler } from "./utils";
+
+type ExtensionCandidate = {
+  externalKey?: string;
+  displayName?: string;
+  profileUrl?: string;
+  sourceUrl?: string;
+  rawText?: string;
+};
+
+type ExtensionFilterDiagnosticElement = {
+  selector: string;
+  selectorCount: number;
+  tag: string;
+  text: string;
+  attrs: Record<string, string>;
+  valuePreview: string;
+  valueLength: number;
+  hrefKind: string;
+  path: string;
+  rect: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+};
+
+type ExtensionFilterFrameDiagnostics = {
+  ok: boolean;
+  reason: string;
+  frameId: string;
+  frameUrl: string;
+  framePath: string;
+  capturedAt: string;
+  href: string;
+  path: string;
+  title: string;
+  isChatCandidatePage: boolean;
+  bodyTextLength: number;
+  loading: boolean;
+  candidateSelectorHits: number;
+  visibleTextBlocks: number;
+  textHints: string[];
+  inputs: ExtensionFilterDiagnosticElement[];
+  clickables: ExtensionFilterDiagnosticElement[];
+  filterControls: ExtensionFilterDiagnosticElement[];
+  submitControls: ExtensionFilterDiagnosticElement[];
+  candidateContainers: ExtensionFilterDiagnosticElement[];
+  listFingerprint: {
+    signature: string;
+    containerCount: number;
+    selectorHits: number;
+    textLength: number;
+  };
+};
+
+type ExtensionFilterDiagnosticsReport = {
+  sourceUrl: string;
+  title: string;
+  capturedAt: string;
+  frames: ExtensionFilterFrameDiagnostics[];
+};
+
+type ExtensionRecommendQueueItem = {
+  id: string;
+  index: number;
+  externalKey: string;
+  displayName: string;
+  profileUrl: string;
+  rawText: string;
+  salary: string;
+  activeText: string;
+  age: string;
+  experience: string;
+  education: string;
+  arrival: string;
+  greetingButtonText: string;
+  greetingButtonSelector: string;
+  cardSelector: string;
+  sourceUrl: string;
+};
+
+type ExtensionRecommendQueueReport = {
+  sourceUrl: string;
+  title: string;
+  capturedAt: string;
+  href: string;
+  path: string;
+  frameId: string;
+  frameUrl: string;
+  framePath: string;
+  selectedJobText: string;
+  listContainerCount: number;
+  cardCount: number;
+  items: ExtensionRecommendQueueItem[];
+  warnings: string[];
+  listFingerprint: {
+    signature: string;
+    containerCount: number;
+    selectorHits: number;
+    textLength: number;
+    textSample: string;
+  };
+};
+
+let lastFilterDiagnostics: ExtensionFilterDiagnosticsReport | null = null;
+let lastRecommendQueue: ExtensionRecommendQueueReport | null = null;
+
+export function createExtensionRouter({ db }: { db: AppDatabase }) {
+  const router = Router();
+
+  router.get("/health", (_req, res) => {
+    res.json({ ok: true });
+  });
+
+  router.get("/filter-diagnostics", (_req, res) => {
+    res.json(lastFilterDiagnostics);
+  });
+
+  router.get("/recommend-queue", (_req, res) => {
+    res.json(lastRecommendQueue);
+  });
+
+  router.post("/filter-diagnostics", asyncHandler(async (req, res) => {
+    const pageUrl = String(req.body.sourceUrl || "");
+    if (pageUrl && !pageUrl.includes("zhipin.com")) {
+      throw new Error("extension_source_not_supported");
+    }
+
+    const report: ExtensionFilterDiagnosticsReport = {
+      sourceUrl: truncateText(pageUrl, 500),
+      title: truncateText(String(req.body.title || ""), 160),
+      capturedAt: new Date().toISOString(),
+      frames: normalizeFilterDiagnosticFrames(req.body.frames)
+    };
+
+    lastFilterDiagnostics = report;
+    eventHub.emit("extension-filter-diagnostics", report);
+
+    res.json({
+      ok: true,
+      savedAt: report.capturedAt,
+      frameCount: report.frames.length,
+      usefulFrames: report.frames.filter((frame) => frame.ok).length,
+      report
+    });
+  }));
+
+  router.post("/recommend-queue", asyncHandler(async (req, res) => {
+    const pageUrl = String(req.body.sourceUrl || req.body.href || "");
+    if (pageUrl && !pageUrl.includes("zhipin.com")) {
+      throw new Error("extension_source_not_supported");
+    }
+
+    const report = normalizeRecommendQueueReport(req.body, pageUrl);
+    lastRecommendQueue = report;
+    eventHub.emit("recommend-queue", report);
+
+    res.json({
+      ok: true,
+      savedAt: report.capturedAt,
+      count: report.items.length,
+      report
+    });
+  }));
+
+  router.post("/candidates", asyncHandler(async (req, res) => {
+    const defaultJob = getDefaultJob(db);
+    const jobId = Number(req.body.jobId || defaultJob?.id);
+    if (!jobId) throw new Error("job_not_found");
+
+    const pageUrl = String(req.body.sourceUrl || "");
+    if (pageUrl && !pageUrl.includes("zhipin.com")) {
+      throw new Error("extension_source_not_supported");
+    }
+
+    const candidates = normalizeCandidates(req.body.candidates || [], pageUrl);
+    const result = saveCandidatesForJob({
+      db,
+      jobId,
+      candidates,
+      selectorNote: "候选人由 Chrome 扩展从已登录 BOSS 页面导入；发送按钮和输入框仍需在当前页面人工确认或后续扩展化。"
+    });
+
+    eventHub.emit("filter-result", result);
+    res.json(result);
+  }));
+
+  return router;
+}
+
+function normalizeRecommendQueueReport(input: unknown, pageUrl: string): ExtensionRecommendQueueReport {
+  const record = toRecord(input);
+  const listFingerprint = toRecord(record.listFingerprint);
+  const sourceUrl = truncateText(String(record.sourceUrl || pageUrl || record.href || ""), 500);
+  return {
+    sourceUrl,
+    title: truncateText(String(record.title || ""), 160),
+    capturedAt: new Date().toISOString(),
+    href: truncateText(String(record.href || sourceUrl), 500),
+    path: truncateText(String(record.path || ""), 240),
+    frameId: truncateText(String(record.frameId || ""), 40),
+    frameUrl: truncateText(String(record.frameUrl || ""), 500),
+    framePath: truncateText(String(record.framePath || ""), 240),
+    selectedJobText: truncateText(String(record.selectedJobText || ""), 160),
+    listContainerCount: toFiniteNumber(record.listContainerCount),
+    cardCount: toFiniteNumber(record.cardCount),
+    items: normalizeRecommendQueueItems(record.queue || record.items, sourceUrl),
+    warnings: normalizeStringArray(record.warnings, 20, 180),
+    listFingerprint: {
+      signature: truncateText(String(listFingerprint.signature || ""), 180),
+      containerCount: toFiniteNumber(listFingerprint.containerCount),
+      selectorHits: toFiniteNumber(listFingerprint.selectorHits),
+      textLength: toFiniteNumber(listFingerprint.textLength),
+      textSample: truncateText(String(listFingerprint.textSample || ""), 240)
+    }
+  };
+}
+
+function normalizeRecommendQueueItems(input: unknown, pageUrl: string): ExtensionRecommendQueueItem[] {
+  if (!Array.isArray(input)) return [];
+  const seen = new Set<string>();
+  const result: ExtensionRecommendQueueItem[] = [];
+
+  for (const item of input.slice(0, 100)) {
+    const record = toRecord(item);
+    const rawText = truncateText(String(record.rawText || ""), 700);
+    const externalKey = truncateText(String(record.externalKey || record.id || record.profileUrl || rawText.slice(0, 120)), 240);
+    if (!externalKey || seen.has(externalKey)) continue;
+    seen.add(externalKey);
+
+    result.push({
+      id: externalKey,
+      index: toFiniteNumber(record.index),
+      externalKey,
+      displayName: truncateText(String(record.displayName || "\u5019\u9009\u4eba"), 80),
+      profileUrl: truncateText(String(record.profileUrl || ""), 500),
+      rawText,
+      salary: truncateText(String(record.salary || ""), 40),
+      activeText: truncateText(String(record.activeText || ""), 60),
+      age: truncateText(String(record.age || ""), 20),
+      experience: truncateText(String(record.experience || ""), 40),
+      education: truncateText(String(record.education || ""), 40),
+      arrival: truncateText(String(record.arrival || ""), 60),
+      greetingButtonText: truncateText(String(record.greetingButtonText || ""), 40),
+      greetingButtonSelector: truncateText(String(record.greetingButtonSelector || ""), 240),
+      cardSelector: truncateText(String(record.cardSelector || ""), 240),
+      sourceUrl: truncateText(String(record.sourceUrl || pageUrl), 500)
+    });
+  }
+
+  return result;
+}
+
+function normalizeCandidates(input: ExtensionCandidate[], pageUrl: string): AdapterCandidate[] {
+  if (!Array.isArray(input)) return [];
+
+  const seen = new Set<string>();
+  const result: AdapterCandidate[] = [];
+
+  for (const item of input) {
+    const rawText = String(item.rawText || "").trim();
+    const profileUrl = String(item.profileUrl || item.sourceUrl || "").trim();
+    const externalKey = String(item.externalKey || profileUrl || rawText.slice(0, 80)).trim();
+    const displayName = String(item.displayName || rawText.split("\n").find(Boolean) || "候选人").trim();
+    if (!externalKey || externalKey.includes("/job_detail/") || seen.has(externalKey)) continue;
+    if (isFalseCandidateText(displayName) || isFalseCandidateText(externalKey)) continue;
+    if (isFalseCandidateText(rawText) && !hasCandidateEvidence(rawText)) continue;
+    seen.add(externalKey);
+
+    result.push({
+      externalKey,
+      displayName,
+      sourceUrl: pageUrl || profileUrl || undefined
+    });
+  }
+
+  return result.slice(0, 100);
+}
+
+function normalizeFilterDiagnosticFrames(input: unknown): ExtensionFilterFrameDiagnostics[] {
+  if (!Array.isArray(input)) return [];
+  return input.slice(0, 20).map((item, index) => normalizeFilterDiagnosticFrame(item, index));
+}
+
+function normalizeFilterDiagnosticFrame(input: unknown, index: number): ExtensionFilterFrameDiagnostics {
+  const frame = toRecord(input);
+  const listFingerprint = toRecord(frame.listFingerprint);
+  return {
+    ok: Boolean(frame.ok),
+    reason: truncateText(String(frame.reason || ""), 240),
+    frameId: truncateText(String(frame.frameId ?? index), 40),
+    frameUrl: truncateText(String(frame.frameUrl || ""), 500),
+    framePath: truncateText(String(frame.framePath || ""), 240),
+    capturedAt: truncateText(String(frame.capturedAt || ""), 80),
+    href: truncateText(String(frame.href || ""), 500),
+    path: truncateText(String(frame.path || ""), 240),
+    title: truncateText(String(frame.title || ""), 160),
+    isChatCandidatePage: Boolean(frame.isChatCandidatePage),
+    bodyTextLength: toFiniteNumber(frame.bodyTextLength),
+    loading: Boolean(frame.loading),
+    candidateSelectorHits: toFiniteNumber(frame.candidateSelectorHits),
+    visibleTextBlocks: toFiniteNumber(frame.visibleTextBlocks),
+    textHints: normalizeStringArray(frame.textHints, 80, 80),
+    inputs: normalizeDiagnosticElements(frame.inputs, 80),
+    clickables: normalizeDiagnosticElements(frame.clickables, 120),
+    filterControls: normalizeDiagnosticElements(frame.filterControls, 80),
+    submitControls: normalizeDiagnosticElements(frame.submitControls, 40),
+    candidateContainers: normalizeDiagnosticElements(frame.candidateContainers, 30),
+    listFingerprint: {
+      signature: truncateText(String(listFingerprint.signature || ""), 180),
+      containerCount: toFiniteNumber(listFingerprint.containerCount),
+      selectorHits: toFiniteNumber(listFingerprint.selectorHits),
+      textLength: toFiniteNumber(listFingerprint.textLength)
+    }
+  };
+}
+
+function normalizeDiagnosticElements(input: unknown, limit: number): ExtensionFilterDiagnosticElement[] {
+  if (!Array.isArray(input)) return [];
+  return input.slice(0, limit).map((item) => {
+    const element = toRecord(item);
+    const rect = toRecord(element.rect);
+    return {
+      selector: truncateText(String(element.selector || ""), 240),
+      selectorCount: toFiniteNumber(element.selectorCount),
+      tag: truncateText(String(element.tag || ""), 40),
+      text: truncateText(String(element.text || ""), 180),
+      attrs: normalizeAttributes(element.attrs),
+      valuePreview: truncateText(String(element.valuePreview || ""), 100),
+      valueLength: toFiniteNumber(element.valueLength),
+      hrefKind: truncateText(String(element.hrefKind || ""), 40),
+      path: truncateText(String(element.path || ""), 260),
+      rect: {
+        x: toFiniteNumber(rect.x),
+        y: toFiniteNumber(rect.y),
+        width: toFiniteNumber(rect.width),
+        height: toFiniteNumber(rect.height)
+      }
+    };
+  });
+}
+
+function normalizeAttributes(input: unknown): Record<string, string> {
+  const record = toRecord(input);
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(record).slice(0, 14)) {
+    result[truncateText(key, 80)] = truncateText(String(value || ""), 180);
+  }
+  return result;
+}
+
+function normalizeStringArray(input: unknown, limit: number, maxLength: number): string[] {
+  if (!Array.isArray(input)) return [];
+  return input.slice(0, limit).map((item) => truncateText(String(item || ""), maxLength)).filter(Boolean);
+}
+
+function toRecord(input: unknown): Record<string, unknown> {
+  return input && typeof input === "object" ? input as Record<string, unknown> : {};
+}
+
+function toFiniteNumber(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function truncateText(value: string, maxLength: number) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized;
+}

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Recruitment Assistant</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <h1>招聘助手桥接</h1>
+      <p id="status">准备采集当前 BOSS 页面。</p>
+      <button id="filter-collect" type="button">筛选并采集</button>
+      <button id="collect" type="button" class="secondary">仅采集当前页</button>
+      <button id="recommend-queue" type="button" class="secondary">&#37319;&#38598;&#25512;&#33616;&#38431;&#21015;</button>
+      <button id="diagnose-filters" type="button" class="secondary">诊断筛选控件</button>
+      <button id="open-app" type="button" class="secondary">打开本地工具</button>
+      <section id="result" hidden></section>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
+
