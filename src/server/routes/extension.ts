@@ -389,8 +389,8 @@ function normalizeGreetingBatchRecord(input: unknown, pageUrl: string): Extensio
   const clickResult = normalizeGreetingActionResult(record.clickResult);
   const composerResult = normalizeGreetingActionResult(record.composerResult);
   const blockedReason = composerResult.blockedReason || clickResult.blockedReason;
-  const status = blockedReason ? "blocked" : composerResult.inputSelector && composerResult.filled ? "filled" : "failed";
-  const errorMessage = blockedReason || composerResult.reason || clickResult.reason || deriveGreetingBatchError(clickResult, composerResult);
+  const status = deriveGreetingBatchStatus(clickResult, composerResult, blockedReason);
+  const errorMessage = deriveGreetingBatchErrorMessage(status, blockedReason, clickResult, composerResult);
 
   return {
     at: new Date().toISOString(),
@@ -403,6 +403,27 @@ function normalizeGreetingBatchRecord(input: unknown, pageUrl: string): Extensio
   };
 }
 
+function deriveGreetingBatchErrorMessage(
+  status: string,
+  blockedReason: string,
+  clickResult: ExtensionGreetingActionResult,
+  composerResult: ExtensionGreetingActionResult
+) {
+  if (blockedReason) return blockedReason;
+  if (status === "clicked_no_composer") return deriveGreetingBatchError(clickResult, composerResult);
+  return composerResult.reason || clickResult.reason || deriveGreetingBatchError(clickResult, composerResult);
+}
+function deriveGreetingBatchStatus(clickResult: ExtensionGreetingActionResult, composerResult: ExtensionGreetingActionResult, blockedReason: string) {
+  if (blockedReason) return "blocked";
+  if (composerResult.inputSelector && composerResult.filled) return "filled";
+  if (clickResult.clicked && isRecommendFrameWithoutComposer(composerResult)) return "clicked_no_composer";
+  return "failed";
+}
+
+function isRecommendFrameWithoutComposer(composerResult: ExtensionGreetingActionResult) {
+  return !composerResult.inputSelector && (composerResult.path.includes("/web/frame/recommend") || composerResult.path.includes("/web/chat/recommend"));
+}
+
 function normalizeGreetingComposerDiagnostics(input: unknown): ExtensionGreetingComposerDiagnostics {
   const record = toRecord(input);
   return {
@@ -413,9 +434,10 @@ function normalizeGreetingComposerDiagnostics(input: unknown): ExtensionGreeting
 }
 
 function deriveGreetingBatchError(clickResult: ExtensionGreetingActionResult, composerResult: ExtensionGreetingActionResult) {
-  if (!clickResult.clicked) return "??????????";
-  if (!composerResult.inputSelector) return "??????????????????";
-  if (!composerResult.filled) return "??????????????????";
+  if (!clickResult.clicked) return "\u672a\u70b9\u51fb\u5230\u6253\u62db\u547c\u6309\u94ae\u3002";
+  if (clickResult.clicked && isRecommendFrameWithoutComposer(composerResult)) return "\u5df2\u70b9\u51fb\u63a8\u8350\u9875\u6253\u62db\u547c\uff0c\u4f46\u9875\u9762\u672a\u6253\u5f00\u6d88\u606f\u8f93\u5165\u6846\uff1b\u8be5\u6309\u94ae\u53ef\u80fd\u662f\u76f4\u63a5\u6253\u62db\u547c\u52a8\u4f5c\uff0c\u5df2\u6682\u505c\u907f\u514d\u7ee7\u7eed\u8bef\u70b9\u3002";
+  if (!composerResult.inputSelector) return "\u5df2\u70b9\u51fb\u6253\u62db\u547c\uff0c\u4f46\u672a\u8bc6\u522b\u5230\u6d88\u606f\u8f93\u5165\u6846\u3002";
+  if (!composerResult.filled) return "\u5df2\u8bc6\u522b\u6d88\u606f\u8f93\u5165\u6846\uff0c\u4f46\u6587\u6848\u672a\u6210\u529f\u5199\u5165\u3002";
   return "";
 }
 
@@ -430,6 +452,14 @@ function applyGreetingBatchRecord(record: ExtensionGreetingBatchRecord) {
     lastGreetingBatch.blocked += 1;
     lastGreetingBatch.status = "blocked";
     lastGreetingBatch.pauseReason = record.errorMessage || "blocked";
+    lastGreetingBatch.nextAllowedAt = "";
+    return;
+  }
+
+  if (record.status === "clicked_no_composer") {
+    lastGreetingBatch.skipped += 1;
+    lastGreetingBatch.status = "paused";
+    lastGreetingBatch.pauseReason = record.errorMessage || "\u63a8\u8350\u9875\u6253\u62db\u547c\u672a\u6253\u5f00\u8f93\u5165\u6846\uff0c\u5df2\u6682\u505c\u3002";
     lastGreetingBatch.nextAllowedAt = "";
     return;
   }

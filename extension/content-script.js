@@ -1445,6 +1445,7 @@ function greetingInputDiagnosticCandidates() {
   const seen = new Set();
   return visibleControlElements(selectors)
     .filter((element) => !isDisabled(element))
+    .filter((element) => !isInsideRecommendCandidateCard(element))
     .filter((element) => {
       if (seen.has(element)) return false;
       seen.add(element);
@@ -1528,7 +1529,12 @@ function greetingInputCandidates() {
     .sort((a, b) => b.score - a.score || elementArea(a.element) - elementArea(b.element));
 }
 
+function isInsideRecommendCandidateCard(element) {
+  return Boolean(element.closest?.(".recommend-list-wrap, ul.card-list, li.card-item, .candidate-card-wrap, .geek-card-small"));
+}
+
 function isPotentialGreetingInput(element) {
+  if (isInsideRecommendCandidateCard(element)) return false;
   const tag = element.tagName;
   if (tag === "INPUT") {
     const type = String(element.getAttribute("type") || "text").toLowerCase();

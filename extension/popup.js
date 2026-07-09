@@ -790,11 +790,19 @@ function renderGreetingBatchResult(batch) {
 
   for (const record of (batch.records || []).slice(-4).reverse()) {
     const row = document.createElement("code");
-    row.textContent = `${record.status} \u00b7 ${record.item?.displayName || "\u5019\u9009\u4eba"} \u00b7 ${record.errorMessage || record.composerResult?.inputSelector || ""}`;
+    row.textContent = `${batchRecordStatusLabel(record.status)} \u00b7 ${record.item?.displayName || "\u5019\u9009\u4eba"} \u00b7 ${record.errorMessage || record.composerResult?.inputSelector || ""}`;
     resultEl.append(row);
   }
 
   appendComposerDiagnostics(batch.records?.at?.(-1));
+}
+
+function batchRecordStatusLabel(status) {
+  if (status === "clicked_no_composer") return "\u5df2\u70b9\u51fb\u65e0\u7f16\u8f91\u5668";
+  if (status === "filled") return "\u5df2\u586b\u5165";
+  if (status === "failed") return "\u5931\u8d25";
+  if (status === "blocked") return "\u963b\u65ad";
+  return status;
 }
 
 function appendComposerDiagnostics(record) {

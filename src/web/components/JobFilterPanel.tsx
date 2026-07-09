@@ -223,7 +223,7 @@ function GreetingBatchBox({ report }: { report: GreetingBatchState }) {
         {report.records.length === 0 ? <code>{"\u6682\u65e0\u6279\u91cf\u8bb0\u5f55"}</code> : null}
         {report.records.slice(-5).reverse().map((record) => (
           <code key={`${record.at}-${record.item.externalKey}`}>
-            {`${new Date(record.at).toLocaleTimeString()} \u00b7 ${record.status} \u00b7 ${record.item.displayName || "\u5019\u9009\u4eba"}${record.errorMessage ? ` \u00b7 ${record.errorMessage}` : ""}`}
+            {`${new Date(record.at).toLocaleTimeString()} \u00b7 ${recordStatusLabel(record.status)} \u00b7 ${record.item.displayName || "\u5019\u9009\u4eba"}${record.errorMessage ? ` \u00b7 ${record.errorMessage}` : ""}`}
           </code>
         ))}
       </div>
@@ -248,6 +248,14 @@ function GreetingComposerDiagnosticsBox({ record }: { record: GreetingBatchState
       {diagnostics.sendCandidates.length ? <code>{`\u53d1\u9001\u6309\u94ae\u5019\u9009\uff1a${diagnostics.sendCandidates.slice(0, 3).map((item) => item.selector || item.path || item.tag).join(" | ")}`}</code> : null}
     </div>
   );
+}
+
+function recordStatusLabel(status: string) {
+  if (status === "clicked_no_composer") return "\u5df2\u70b9\u51fb\u65e0\u7f16\u8f91\u5668";
+  if (status === "filled") return "\u5df2\u586b\u5165";
+  if (status === "failed") return "\u5931\u8d25";
+  if (status === "blocked") return "\u963b\u65ad";
+  return status;
 }
 
 function batchStatusLabel(status: GreetingBatchState["status"]) {
