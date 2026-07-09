@@ -87,6 +87,45 @@ type ExtensionRecommendQueueItem = {
   sourceUrl: string;
 };
 
+
+type ExtensionGreetingActionResult = {
+  ok: boolean;
+  clicked: boolean;
+  reason: string;
+  blockedReason: string;
+  href: string;
+  path: string;
+  title: string;
+  frameId: string;
+  frameUrl: string;
+  framePath: string;
+  candidateIndex: number;
+  externalKey: string;
+  displayName: string;
+  cardSelector: string;
+  greetingButtonText: string;
+  greetingButtonSelector: string;
+  inputSelector: string;
+  inputText: string;
+  sendButtonSelector: string;
+  sendButtonText: string;
+  filled: boolean;
+  readyToSend: boolean;
+  sent: boolean;
+  sendSuppressed: boolean;
+  messagePreview: string;
+  bodyTextLength: number;
+};
+
+type ExtensionGreetingTestReport = {
+  sourceUrl: string;
+  title: string;
+  capturedAt: string;
+  item: ExtensionRecommendQueueItem;
+  messagePreview: string;
+  clickResult: ExtensionGreetingActionResult;
+  composerResult: ExtensionGreetingActionResult;
+};
 type ExtensionRecommendQueueReport = {
   sourceUrl: string;
   title: string;
@@ -112,6 +151,7 @@ type ExtensionRecommendQueueReport = {
 
 let lastFilterDiagnostics: ExtensionFilterDiagnosticsReport | null = null;
 let lastRecommendQueue: ExtensionRecommendQueueReport | null = null;
+let lastGreetingTest: ExtensionGreetingTestReport | null = null;
 
 export function createExtensionRouter({ db }: { db: AppDatabase }) {
   const router = Router();
@@ -126,6 +166,10 @@ export function createExtensionRouter({ db }: { db: AppDatabase }) {
 
   router.get("/recommend-queue", (_req, res) => {
     res.json(lastRecommendQueue);
+  });
+
+  router.get("/greeting-test", (_req, res) => {
+    res.json(lastGreetingTest);
   });
 
   router.post("/filter-diagnostics", asyncHandler(async (req, res) => {
@@ -171,6 +215,23 @@ export function createExtensionRouter({ db }: { db: AppDatabase }) {
     });
   }));
 
+  router.post("/greeting-test", asyncHandler(async (req, res) => {
+    const pageUrl = String(req.body.sourceUrl || req.body.href || "");
+    if (pageUrl && !pageUrl.includes("zhipin.com")) {
+      throw new Error("extension_source_not_supported");
+    }
+
+    const report = normalizeGreetingTestReport(req.body, pageUrl);
+    lastGreetingTest = report;
+    eventHub.emit("greeting-test", report);
+
+    res.json({
+      ok: true,
+      savedAt: report.capturedAt,
+      report
+    });
+  }));
+
   router.post("/candidates", asyncHandler(async (req, res) => {
     const defaultJob = getDefaultJob(db);
     const jobId = Number(req.body.jobId || defaultJob?.id);
@@ -194,6 +255,75 @@ export function createExtensionRouter({ db }: { db: AppDatabase }) {
   }));
 
   return router;
+}
+
+function normalizeGreetingTestReport(input: unknown, pageUrl: string): ExtensionGreetingTestReport {
+  const record = toRecord(input);
+  const sourceUrl = truncateText(String(record.sourceUrl || pageUrl || ""), 500);
+  return {
+    sourceUrl,
+    title: truncateText(String(record.title || ""), 160),
+    capturedAt: new Date().toISOString(),
+    item: normalizeGreetingTestItem(record.item, sourceUrl),
+    messagePreview: truncateText(String(record.messagePreview || ""), 160),
+    clickResult: normalizeGreetingActionResult(record.clickResult),
+    composerResult: normalizeGreetingActionResult(record.composerResult)
+  };
+}
+
+function normalizeGreetingTestItem(input: unknown, pageUrl: string): ExtensionRecommendQueueItem {
+  const normalized = normalizeRecommendQueueItems([input], pageUrl)[0];
+  if (normalized) return normalized;
+  return {
+    id: "",
+    index: 0,
+    externalKey: "",
+    displayName: "\u5019\u9009\u4eba",
+    profileUrl: "",
+    rawText: "",
+    salary: "",
+    activeText: "",
+    age: "",
+    experience: "",
+    education: "",
+    arrival: "",
+    greetingButtonText: "",
+    greetingButtonSelector: "",
+    cardSelector: "",
+    sourceUrl: pageUrl
+  };
+}
+
+function normalizeGreetingActionResult(input: unknown): ExtensionGreetingActionResult {
+  const record = toRecord(input);
+  return {
+    ok: Boolean(record.ok),
+    clicked: Boolean(record.clicked),
+    reason: truncateText(String(record.reason || ""), 240),
+    blockedReason: truncateText(String(record.blockedReason || ""), 240),
+    href: truncateText(String(record.href || ""), 500),
+    path: truncateText(String(record.path || ""), 240),
+    title: truncateText(String(record.title || ""), 160),
+    frameId: truncateText(String(record.frameId || ""), 40),
+    frameUrl: truncateText(String(record.frameUrl || ""), 500),
+    framePath: truncateText(String(record.framePath || ""), 240),
+    candidateIndex: toFiniteNumber(record.candidateIndex),
+    externalKey: truncateText(String(record.externalKey || ""), 240),
+    displayName: truncateText(String(record.displayName || ""), 80),
+    cardSelector: truncateText(String(record.cardSelector || ""), 240),
+    greetingButtonText: truncateText(String(record.greetingButtonText || ""), 40),
+    greetingButtonSelector: truncateText(String(record.greetingButtonSelector || ""), 240),
+    inputSelector: truncateText(String(record.inputSelector || ""), 240),
+    inputText: truncateText(String(record.inputText || ""), 100),
+    sendButtonSelector: truncateText(String(record.sendButtonSelector || ""), 240),
+    sendButtonText: truncateText(String(record.sendButtonText || ""), 40),
+    filled: Boolean(record.filled),
+    readyToSend: Boolean(record.readyToSend),
+    sent: Boolean(record.sent),
+    sendSuppressed: Boolean(record.sendSuppressed),
+    messagePreview: truncateText(String(record.messagePreview || ""), 160),
+    bodyTextLength: toFiniteNumber(record.bodyTextLength)
+  };
 }
 
 function normalizeRecommendQueueReport(input: unknown, pageUrl: string): ExtensionRecommendQueueReport {

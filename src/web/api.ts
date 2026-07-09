@@ -166,6 +166,45 @@ export type RecommendQueueReport = {
     textSample: string;
   };
 };
+
+export type GreetingActionResult = {
+  ok: boolean;
+  clicked: boolean;
+  reason: string;
+  blockedReason: string;
+  href: string;
+  path: string;
+  title: string;
+  frameId: string;
+  frameUrl: string;
+  framePath: string;
+  candidateIndex: number;
+  externalKey: string;
+  displayName: string;
+  cardSelector: string;
+  greetingButtonText: string;
+  greetingButtonSelector: string;
+  inputSelector: string;
+  inputText: string;
+  sendButtonSelector: string;
+  sendButtonText: string;
+  filled: boolean;
+  readyToSend: boolean;
+  sent: boolean;
+  sendSuppressed: boolean;
+  messagePreview: string;
+  bodyTextLength: number;
+};
+
+export type GreetingTestReport = {
+  sourceUrl: string;
+  title: string;
+  capturedAt: string;
+  item: RecommendQueueItem;
+  messagePreview: string;
+  clickResult: GreetingActionResult;
+  composerResult: GreetingActionResult;
+};
 export type SendLog = {
   id: number;
   candidate_key: string;
@@ -241,6 +280,10 @@ export async function getExtensionFilterDiagnostics() {
 
 export async function getRecommendQueue() {
   return request<RecommendQueueReport | null>("/api/extension/recommend-queue");
+}
+
+export async function getGreetingTest() {
+  return request<GreetingTestReport | null>("/api/extension/greeting-test");
 }
 
 export async function getCandidates(jobId?: number) {

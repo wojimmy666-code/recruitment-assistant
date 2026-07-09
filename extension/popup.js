@@ -4,6 +4,7 @@ const resultEl = document.getElementById("result");
 const collectButton = document.getElementById("collect");
 const filterCollectButton = document.getElementById("filter-collect");
 const recommendQueueButton = document.getElementById("recommend-queue");
+const singleGreetingTestButton = document.getElementById("single-greeting-test");
 const diagnoseFiltersButton = document.getElementById("diagnose-filters");
 const openAppButton = document.getElementById("open-app");
 
@@ -17,6 +18,10 @@ filterCollectButton.addEventListener("click", () => {
 
 recommendQueueButton.addEventListener("click", () => {
   void collectRecommendQueue();
+});
+
+singleGreetingTestButton.addEventListener("click", () => {
+  void runSingleGreetingTest();
 });
 
 diagnoseFiltersButton.addEventListener("click", () => {
@@ -150,6 +155,158 @@ async function collectRecommendQueueFromTab(tabId) {
     .slice(0, 4)
     .join("\uff1b");
   throw new Error(usefulErrors || "\u5f53\u524d\u63a8\u8350\u9875\u6ca1\u6709\u8bc6\u522b\u5230\u5019\u9009\u961f\u5217\u3002");
+}
+
+async function runSingleGreetingTest() {
+  setBusy(true, "\u6b63\u5728\u6267\u884c\u5355\u4eba\u6253\u62db\u547c\u6d4b\u8bd5...");
+  resultEl.hidden = true;
+  resultEl.replaceChildren();
+
+  try {
+    await assertLocalToolReady();
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id || !tab.url?.includes("zhipin.com")) {
+      throw new Error("\u8bf7\u5148\u5207\u6362\u5230\u5df2\u767b\u5f55\u7684 BOSS \u63a8\u8350\u725b\u4eba\u9875\u9762\u3002");
+    }
+
+    const context = await getSingleGreetingContext();
+    statusEl.textContent = `\u6b63\u5728\u70b9\u51fb\u961f\u5217\u7b2c ${context.item.index + 1} \u4e2a\u5019\u9009\u4eba\u7684\u6253\u62db\u547c...`;
+    const clickResult = await clickGreetingInTab(tab.id, context.item);
+    await sleep(1800);
+
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const inspectTabId = activeTab?.id && activeTab.url?.includes("zhipin.com") ? activeTab.id : tab.id;
+    const composerResult = await inspectGreetingComposerInTab(inspectTabId, context.message);
+
+    const response = await fetch(`${localBaseUrl}/api/extension/greeting-test`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sourceUrl: activeTab?.url || tab.url,
+        title: activeTab?.title || tab.title,
+        item: context.item,
+        messagePreview: context.message.slice(0, 120),
+        clickResult,
+        composerResult
+      })
+    });
+
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "\u4e0a\u62a5\u5355\u4eba\u6d4b\u8bd5\u7ed3\u679c\u5931\u8d25\u3002");
+
+    statusEl.textContent = composerResult.blockedReason
+      ? `\u5355\u4eba\u6d4b\u8bd5\u5df2\u6682\u505c\uff1a${composerResult.blockedReason}`
+      : composerResult.inputSelector
+        ? "\u5355\u4eba\u6d4b\u8bd5\u5b8c\u6210\uff1a\u5df2\u586b\u5165\u6587\u6848\uff0c\u672a\u70b9\u51fb\u53d1\u9001\u3002"
+        : "\u5df2\u70b9\u51fb\u6253\u62db\u547c\uff0c\u4f46\u672a\u8bc6\u522b\u5230\u6d88\u606f\u8f93\u5165\u6846\u3002";
+    renderGreetingTestResult(payload.report);
+  } catch (error) {
+    statusEl.textContent = error instanceof Error ? error.message : String(error);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function getSingleGreetingContext() {
+  const [queueResponse, jobsResponse, templatesResponse] = await Promise.all([
+    fetch(`${localBaseUrl}/api/extension/recommend-queue`),
+    fetch(`${localBaseUrl}/api/jobs`),
+    fetch(`${localBaseUrl}/api/templates`)
+  ]);
+  if (!queueResponse.ok) throw new Error("\u8bfb\u53d6\u63a8\u8350\u961f\u5217\u5931\u8d25\u3002");
+  if (!jobsResponse.ok) throw new Error("\u8bfb\u53d6\u672c\u5730\u804c\u4f4d\u5931\u8d25\u3002");
+  if (!templatesResponse.ok) throw new Error("\u8bfb\u53d6\u6253\u62db\u547c\u6a21\u677f\u5931\u8d25\u3002");
+
+  const queue = await queueResponse.json();
+  const jobs = await jobsResponse.json();
+  const templates = await templatesResponse.json();
+  const item = queue?.items?.find((candidate) => candidate.greetingButtonSelector) || queue?.items?.[0];
+  if (!item) throw new Error("\u8bf7\u5148\u5728\u63a8\u8350\u9875\u91c7\u96c6\u5019\u9009\u961f\u5217\u3002");
+
+  const job = Array.isArray(jobs) ? jobs[0] : null;
+  const template = Array.isArray(templates) ? templates[0] : null;
+  const message = renderTemplateMessage(template?.body || "", job);
+  if (!message) throw new Error("\u672c\u5730\u6253\u62db\u547c\u6587\u6848\u4e3a\u7a7a\uff0c\u8bf7\u5148\u5728\u672c\u5730\u5de5\u5177\u586b\u5199\u6a21\u677f\u3002");
+  return { item, message };
+}
+
+async function clickGreetingInTab(tabId, item) {
+  const frames = await prepareFrames(tabId);
+  const results = [];
+  for (const frame of frames) {
+    if (frame.injectError) {
+      results.push({ ok: false, reason: frame.injectError, frameId: frame.frameId, frameUrl: frame.url, framePath: pathFromUrl(frame.url) });
+      continue;
+    }
+    try {
+      const [result] = await chrome.scripting.executeScript({
+        target: { tabId, frameIds: [frame.frameId] },
+        func: (candidate) => {
+          const run = globalThis.__recruitmentAssistantClickSingleGreeting;
+          if (typeof run !== "function") return { ok: false, reason: "\u5355\u4eba\u6253\u62db\u547c\u811a\u672c\u672a\u52a0\u8f7d\u3002", href: location.href, path: location.pathname };
+          return run(candidate);
+        },
+        args: [item]
+      });
+      results.push({ ...(result?.result || { ok: false, reason: "\u5355\u4eba\u70b9\u51fb\u811a\u672c\u6ca1\u6709\u8fd4\u56de\u7ed3\u679c\u3002" }), frameId: frame.frameId, frameUrl: frame.url, framePath: pathFromUrl(frame.url) });
+    } catch (error) {
+      results.push({ ok: false, reason: error instanceof Error ? error.message : String(error), frameId: frame.frameId, frameUrl: frame.url, framePath: pathFromUrl(frame.url) });
+    }
+  }
+  const clicked = results.find((result) => result.ok && result.clicked);
+  if (clicked) return clicked;
+  throw new Error(buildGreetingFrameError(results, "\u6ca1\u6709\u5728\u5f53\u524d BOSS \u9875\u9762\u70b9\u51fb\u5230\u6253\u62db\u547c\u6309\u94ae\u3002"));
+}
+
+async function inspectGreetingComposerInTab(tabId, message) {
+  const frames = await prepareFrames(tabId);
+  const results = [];
+  for (const frame of frames) {
+    if (frame.injectError) {
+      results.push({ ok: false, reason: frame.injectError, frameId: frame.frameId, frameUrl: frame.url, framePath: pathFromUrl(frame.url) });
+      continue;
+    }
+    try {
+      const [result] = await chrome.scripting.executeScript({
+        target: { tabId, frameIds: [frame.frameId] },
+        func: (messageText) => {
+          const inspect = globalThis.__recruitmentAssistantInspectGreetingComposer;
+          if (typeof inspect !== "function") return { ok: false, reason: "\u6253\u62db\u547c\u8f93\u5165\u6846\u8bc6\u522b\u811a\u672c\u672a\u52a0\u8f7d\u3002", href: location.href, path: location.pathname };
+          return inspect({ message: messageText, fill: true, send: false });
+        },
+        args: [message]
+      });
+      results.push({ ...(result?.result || { ok: false, reason: "\u8f93\u5165\u6846\u8bc6\u522b\u811a\u672c\u6ca1\u6709\u8fd4\u56de\u7ed3\u679c\u3002" }), frameId: frame.frameId, frameUrl: frame.url, framePath: pathFromUrl(frame.url) });
+    } catch (error) {
+      results.push({ ok: false, reason: error instanceof Error ? error.message : String(error), frameId: frame.frameId, frameUrl: frame.url, framePath: pathFromUrl(frame.url) });
+    }
+  }
+  const blocked = results.find((result) => result.blockedReason);
+  if (blocked) return blocked;
+  const ready = results.find((result) => result.ok && result.inputSelector);
+  if (ready) return ready;
+  return results.sort((a, b) => framePriority(b) - framePriority(a))[0] || { ok: false, reason: "\u672a\u8bc6\u522b\u5230\u6253\u62db\u547c\u8f93\u5165\u533a\u3002" };
+}
+
+function buildGreetingFrameError(results, fallback) {
+  const details = results
+    .filter((result) => result?.reason)
+    .sort((a, b) => framePriority(b) - framePriority(a))
+    .map((result) => `${result.path || result.framePath || "frame"}: ${result.reason}`)
+    .slice(0, 4)
+    .join("\uff1b");
+  return details || fallback;
+}
+
+function renderTemplateMessage(body, job) {
+  return String(body || "")
+    .replaceAll("{\u804c\u4f4d}", job?.name || "")
+    .replaceAll("{\u57ce\u5e02}", job?.city || "")
+    .trim();
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function diagnoseFilterControls() {
@@ -397,6 +554,30 @@ async function assertLocalToolReady() {
   }
 }
 
+function renderGreetingTestResult(report) {
+  resultEl.hidden = false;
+  resultEl.replaceChildren();
+  const summary = document.createElement("p");
+  const composer = report?.composerResult || {};
+  summary.textContent = composer.blockedReason
+    ? `\u5355\u4eba\u6d4b\u8bd5\u6682\u505c\uff1a${composer.blockedReason}`
+    : composer.inputSelector
+      ? "\u5355\u4eba\u6d4b\u8bd5\u5b8c\u6210\uff1a\u5df2\u586b\u5165\u6587\u6848\uff0c\u672a\u53d1\u9001\u3002"
+      : "\u5df2\u70b9\u51fb\u6253\u62db\u547c\uff0c\u4f46\u672a\u8bc6\u522b\u5230\u8f93\u5165\u6846\u3002";
+  resultEl.append(summary);
+
+  for (const line of [
+    report?.item?.displayName ? `\u5019\u9009\u4eba\uff1a${report.item.displayName}` : "",
+    report?.clickResult?.greetingButtonSelector ? `greet: ${report.clickResult.greetingButtonSelector}` : "",
+    composer.inputSelector ? `input: ${composer.inputSelector}` : "",
+    composer.sendButtonSelector ? `send: ${composer.sendButtonSelector}` : ""
+  ].filter(Boolean)) {
+    const row = document.createElement("code");
+    row.textContent = line;
+    resultEl.append(row);
+  }
+}
+
 function renderDiagnosticsResult(report) {
   resultEl.hidden = false;
   resultEl.replaceChildren();
@@ -465,6 +646,7 @@ function setBusy(isBusy, message) {
   collectButton.disabled = isBusy;
   filterCollectButton.disabled = isBusy;
   recommendQueueButton.disabled = isBusy;
+  singleGreetingTestButton.disabled = isBusy;
   diagnoseFiltersButton.disabled = isBusy;
   if (message) statusEl.textContent = message;
 }

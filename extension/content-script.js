@@ -1319,6 +1319,7 @@ function findGreetingControl(card) {
   const target = controls[0];
   if (!target) return null;
   return {
+    element: target.element,
     text: target.text,
     selector: diagnosticSelector(target.element),
     rect: diagnosticRect(target.element)
@@ -1344,6 +1345,186 @@ function firstRecommendMatch(text, patterns) {
   return "";
 }
 
+function clickSingleGreetingFromRecommendQueue(candidate) {
+  if (!location.href.includes("zhipin.com")) {
+    return { ok: false, reason: "not_boss_page", href: location.href, path: location.pathname };
+  }
+  if (!isRecommendCandidateFrame()) {
+    return { ok: false, reason: "not_recommend_frame", href: location.href, path: location.pathname };
+  }
+
+  const blockedReason = detectGreetingBlockedReason();
+  if (blockedReason) {
+    return { ok: false, clicked: false, blockedReason, reason: blockedReason, href: location.href, path: location.pathname };
+  }
+
+  const match = findRecommendQueueCardByCandidate(candidate);
+  if (!match.card) {
+    return { ok: false, clicked: false, reason: "candidate_card_not_found", href: location.href, path: location.pathname, candidateIndex: Number(candidate?.index ?? -1) };
+  }
+
+  const greeting = findGreetingControl(match.card);
+  if (!greeting?.element) {
+    return {
+      ok: false,
+      clicked: false,
+      reason: "greeting_button_not_found",
+      href: location.href,
+      path: location.pathname,
+      cardSelector: diagnosticSelector(match.card),
+      candidateIndex: match.index
+    };
+  }
+
+  clickElement(greeting.element);
+  return {
+    ok: true,
+    clicked: true,
+    href: location.href,
+    path: location.pathname,
+    title: document.title,
+    candidateIndex: match.index,
+    externalKey: match.externalKey,
+    displayName: findDisplayName(match.card, match.rawText),
+    cardSelector: diagnosticSelector(match.card),
+    greetingButtonText: greeting.text,
+    greetingButtonSelector: greeting.selector,
+    beforeFingerprint: getCandidateListFingerprint()
+  };
+}
+
+function inspectGreetingComposer(options = {}) {
+  const blockedReason = detectGreetingBlockedReason();
+  const input = findGreetingInputControl();
+  const sendButton = findGreetingSendControl();
+  let filled = false;
+  const message = normalizeText(options.message || "");
+
+  if (!blockedReason && input && options.fill && message) {
+    setControlValue(input, message);
+    filled = looseTextIncludes(readControlValue(input), message) || looseTextIncludes(input.textContent || "", message);
+  }
+
+  return {
+    ok: true,
+    href: location.href,
+    path: location.pathname,
+    title: document.title,
+    blockedReason,
+    inputSelector: input ? diagnosticSelector(input) : "",
+    inputText: input ? truncateDiagnosticText(controlTextForDiagnostics(input), 80) : "",
+    sendButtonSelector: sendButton ? diagnosticSelector(sendButton) : "",
+    sendButtonText: sendButton ? textFromClickable(sendButton) : "",
+    filled,
+    readyToSend: Boolean(!blockedReason && input && sendButton && filled),
+    sent: false,
+    sendSuppressed: true,
+    messagePreview: message.slice(0, 120),
+    bodyTextLength: normalizeText(document.body?.textContent || "").length
+  };
+}
+
+function findRecommendQueueCardByCandidate(candidate) {
+  const containers = findCandidateListContainers();
+  const scopes = containers.length > 0 ? containers : findRecommendQueueFallbackContainers();
+  const cards = findRecommendQueueCards(scopes);
+  const desiredIndex = Number(candidate?.index);
+
+  for (let index = 0; index < cards.length; index += 1) {
+    const card = cards[index];
+    const rawText = normalizeText(card.textContent || "");
+    const profileUrl = findProfileUrl(card) || "";
+    const externalKey = findExternalKey(card, profileUrl, rawText);
+    if (recommendQueueCandidateMatches(candidate, { rawText, profileUrl, externalKey, index })) {
+      return { card, index, rawText, profileUrl, externalKey };
+    }
+  }
+
+  if (Number.isInteger(desiredIndex) && desiredIndex >= 0 && desiredIndex < cards.length) {
+    const card = cards[desiredIndex];
+    const rawText = normalizeText(card.textContent || "");
+    const profileUrl = findProfileUrl(card) || "";
+    const externalKey = findExternalKey(card, profileUrl, rawText);
+    return { card, index: desiredIndex, rawText, profileUrl, externalKey };
+  }
+
+  return { card: null, index: -1, rawText: "", profileUrl: "", externalKey: "" };
+}
+
+function recommendQueueCandidateMatches(candidate, cardInfo) {
+  if (!candidate) return false;
+  const candidateKey = normalizeText(candidate.externalKey || candidate.id || "");
+  const candidateUrl = normalizeText(candidate.profileUrl || "");
+  const candidateName = normalizeText(candidate.displayName || "");
+  const cardKey = normalizeText(cardInfo.externalKey || "");
+  const cardUrl = normalizeText(cardInfo.profileUrl || "");
+
+  if (candidateKey && cardKey && (candidateKey === cardKey || candidateKey.includes(cardKey) || cardKey.includes(candidateKey))) return true;
+  if (candidateUrl && cardUrl && candidateUrl === cardUrl) return true;
+  if (candidateName && cardInfo.rawText.includes(candidateName) && Number(candidate.index) === cardInfo.index) return true;
+  return false;
+}
+
+function findGreetingInputControl() {
+  return visibleControlElements("textarea, input, [contenteditable=\"true\"], [role=\"textbox\"], div[class*=\"input\"], div[class*=\"editor\"], div[class*=\"textarea\"]")
+    .filter((element) => !isDisabled(element))
+    .filter((element) => isPotentialGreetingInput(element))
+    .map((element) => ({ element, score: scoreGreetingInput(element) }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score || elementArea(a.element) - elementArea(b.element))[0]?.element || null;
+}
+
+function isPotentialGreetingInput(element) {
+  const tag = element.tagName;
+  if (tag === "INPUT") {
+    const type = String(element.getAttribute("type") || "text").toLowerCase();
+    if (!/^(text|search)?$/.test(type)) return false;
+  }
+  const hint = greetingControlHint(element);
+  if (/\u641c\u7d22|\u7b5b\u9009|\u57ce\u5e02|\u5730\u533a|\u85aa\u8d44|\u5173\u952e\u8bcd/.test(hint)) return false;
+  return element.isContentEditable || element.getAttribute("role") === "textbox" || /TEXTAREA|INPUT/.test(tag) || /input|editor|textarea/i.test(String(element.className || ""));
+}
+
+function scoreGreetingInput(element) {
+  const hint = greetingControlHint(element);
+  let score = 0;
+  if (element.tagName === "TEXTAREA") score += 8;
+  if (element.isContentEditable || element.getAttribute("role") === "textbox") score += 8;
+  if (/\u8f93\u5165|\u6d88\u606f|\u56de\u590d|\u6c9f\u901a|\u6253\u62db\u547c|\u8bf4\u70b9|chat|message|editor|textarea|input/i.test(hint)) score += 10;
+  if (/\u804a\u5929|\u53d1\u9001|\u62db\u547c/.test(normalizeText(document.body?.textContent || ""))) score += 2;
+  return score;
+}
+
+function greetingControlHint(element) {
+  return [
+    element.getAttribute("placeholder"),
+    element.getAttribute("aria-label"),
+    element.getAttribute("title"),
+    element.getAttribute("role"),
+    element.getAttribute("name"),
+    element.id,
+    element.className,
+    element.closest("label")?.textContent,
+    element.parentElement?.textContent
+  ].map((value) => normalizeText(String(value || ""))).join(" ");
+}
+
+function findGreetingSendControl() {
+  return visibleControlElements("button, a, span, div, [role=\"button\"], input[type=\"button\"], input[type=\"submit\"]")
+    .filter((element) => !isDisabled(element))
+    .map((element) => ({ element, text: textFromClickable(element) }))
+    .filter((item) => item.text && item.text.length <= 20 && /^(\u53d1\u9001|\u786e\u8ba4\u53d1\u9001|\u7acb\u5373\u6c9f\u901a|\u5f00\u59cb\u6c9f\u901a|\u6253\u62db\u547c)$/.test(item.text))
+    .sort((a, b) => elementArea(a.element) - elementArea(b.element))[0]?.element || null;
+}
+
+function detectGreetingBlockedReason() {
+  const text = normalizeText(document.body?.textContent || "");
+  if (/\u67e5\u770b\u592a\u9891\u7e41|\u64cd\u4f5c\u8fc7\u4e8e\u9891\u7e41|\u8bf7\u7a0d\u540e\u91cd\u8bd5|\u7a0d\u540e\u518d\u8bd5/.test(text)) return "BOSS \u63d0\u793a\u64cd\u4f5c\u9891\u7e41\uff0c\u5df2\u505c\u6b62\u3002";
+  if (/\u9a8c\u8bc1\u7801|\u5b89\u5168\u9a8c\u8bc1|\u6ed1\u5757\u9a8c\u8bc1|\u8bf7\u5b8c\u6210\u9a8c\u8bc1/.test(text)) return "BOSS \u51fa\u73b0\u5b89\u5168\u9a8c\u8bc1\uff0c\u5df2\u505c\u6b62\u3002";
+  if (/\u8bf7\u5148\u767b\u5f55|\u767b\u5f55\u540e/.test(text)) return "BOSS \u767b\u5f55\u72b6\u6001\u5f02\u5e38\uff0c\u5df2\u505c\u6b62\u3002";
+  return "";
+}
+
 function waitForUiSettle(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -1357,6 +1538,8 @@ globalThis.__recruitmentAssistantGetDiagnostics = getCandidateDiagnostics;
 globalThis.__recruitmentAssistantGetListFingerprint = getCandidateListFingerprint;
 globalThis.__recruitmentAssistantCollectFilterDiagnostics = collectFilterControlDiagnostics;
 globalThis.__recruitmentAssistantCollectRecommendQueue = collectRecommendQueueFromPage;
+globalThis.__recruitmentAssistantClickSingleGreeting = clickSingleGreetingFromRecommendQueue;
+globalThis.__recruitmentAssistantInspectGreetingComposer = inspectGreetingComposer;
 
 function normalizeText(value) {
   return value.replace(/\s+/g, " ").trim();

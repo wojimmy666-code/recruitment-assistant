@@ -1,5 +1,5 @@
 import { Save, Search } from "lucide-react";
-import type { Candidate, ExtensionFilterDiagnosticElement, ExtensionFilterDiagnosticsReport, ExtensionFilterFrameDiagnostics, FilterResult, Job, RecommendQueueReport, SelectorDiagnostics } from "../api";
+import type { Candidate, ExtensionFilterDiagnosticElement, ExtensionFilterDiagnosticsReport, ExtensionFilterFrameDiagnostics, FilterResult, GreetingTestReport, Job, RecommendQueueReport, SelectorDiagnostics } from "../api";
 
 type Props = {
   job: Job;
@@ -10,6 +10,7 @@ type Props = {
   diagnostics: SelectorDiagnostics | null;
   extensionDiagnostics: ExtensionFilterDiagnosticsReport | null;
   recommendQueue: RecommendQueueReport | null;
+  greetingTest: GreetingTestReport | null;
   onChange: (job: Job) => void;
   onSave: () => void;
   onFilter: () => void;
@@ -25,6 +26,7 @@ export function JobFilterPanel({
   diagnostics,
   extensionDiagnostics,
   recommendQueue,
+  greetingTest,
   onChange,
   onSave,
   onFilter,
@@ -114,6 +116,8 @@ export function JobFilterPanel({
 
       {recommendQueue ? <RecommendQueueBox report={recommendQueue} /> : null}
 
+      {greetingTest ? <GreetingTestBox report={greetingTest} /> : null}
+
       {extensionDiagnostics ? <ExtensionFilterDiagnosticsBox diagnostics={extensionDiagnostics} /> : null}
 
       {diagnostics ? (
@@ -169,6 +173,34 @@ function recommendQueueMeta(item: RecommendQueueReport["items"][number]) {
   const parts = [item.salary, item.activeText, item.age, item.experience, item.education, item.arrival].filter(Boolean);
   if (parts.length > 0) return parts.join(" \u00b7 ");
   return item.rawText.slice(0, 120) || item.externalKey;
+}
+
+function GreetingTestBox({ report }: { report: GreetingTestReport }) {
+  const composer = report.composerResult;
+  const click = report.clickResult;
+  const status = composer.blockedReason
+    ? composer.blockedReason
+    : composer.inputSelector
+      ? "\u5df2\u586b\u5165\u6587\u6848\uff0c\u672a\u53d1\u9001"
+      : click.clicked
+        ? "\u5df2\u70b9\u51fb\u6253\u62db\u547c\uff0c\u672a\u8bc6\u522b\u8f93\u5165\u6846"
+        : click.reason || "\u672a\u5b8c\u6210\u70b9\u51fb";
+
+  return (
+    <div className="diagnosticsBox greetingTestBox">
+      <strong>{"\u5355\u4eba\u6253\u62db\u547c\u6d4b\u8bd5"}</strong>
+      <span>{`${new Date(report.capturedAt).toLocaleString()} \u00b7 ${report.item.displayName || "\u5019\u9009\u4eba"}`}</span>
+      <span>{status}</span>
+      <div className="selectorGroup nestedDiagnostics">
+        <span>{"\u52a8\u4f5c\u7ed3\u679c"}</span>
+        <code>{`click: ${click.clicked ? "ok" : "failed"}${click.reason ? ` / ${click.reason}` : ""}`}</code>
+        {click.greetingButtonSelector ? <code>{`greet: ${click.greetingButtonSelector}`}</code> : null}
+        {composer.inputSelector ? <code>{`input: ${composer.inputSelector}`}</code> : null}
+        {composer.sendButtonSelector ? <code>{`send: ${composer.sendButtonSelector}`}</code> : null}
+        {report.messagePreview ? <code>{`message: ${report.messagePreview}`}</code> : null}
+      </div>
+    </div>
+  );
 }
 
 function ExtensionFilterDiagnosticsBox({ diagnostics }: { diagnostics: ExtensionFilterDiagnosticsReport }) {
