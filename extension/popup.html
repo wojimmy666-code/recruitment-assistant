@@ -7,28 +7,29 @@
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
-    <main>
-      <h1>招聘助手桥接</h1>
-      <p id="status">准备采集当前 BOSS 页面。</p>
-      <button id="filter-collect" type="button">筛选并采集</button>
-      <button id="collect" type="button" class="secondary">仅采集当前页</button>
-      <button id="recommend-queue" type="button" class="secondary">&#37319;&#38598;&#25512;&#33616;&#38431;&#21015;</button>
-      <button id="single-greeting-test" type="button" class="secondary">&#21333;&#20154;&#27979;&#35797;&#25171;&#25307;&#21628;</button>
-      <section class="batchControls">
-        <label>&#30446;&#26631;<input id="batch-target" type="number" min="1" max="20" value="3" /></label>
-        <div class="inlineInputs">
-          <label>&#26368;&#23567;&#38388;&#38548;<input id="batch-interval-min" type="number" min="30" value="45" /></label>
-          <label>&#26368;&#22823;&#38388;&#38548;<input id="batch-interval-max" type="number" min="30" value="90" /></label>
+    <main class="popupShell">
+      <header class="popupHeader">
+        <div>
+          <h1>批量打招呼</h1>
+          <p id="status">等待开始。</p>
         </div>
-        <button id="batch-start" type="button" class="secondary">&#24320;&#22987;&#25209;&#37327;&#25171;&#25307;&#21628;</button>
-        <button id="batch-continue" type="button" class="secondary">&#32487;&#32493;&#19979;&#19968;&#20010;</button>
-        <button id="batch-pause" type="button" class="secondary">&#26242;&#20572;&#25209;&#37327;</button>
+        <div class="headerActions">
+          <button id="open-app" class="iconButton" type="button" title="打开本地工具" aria-label="打开本地工具">↗</button>
+          <button id="open-debug" class="iconButton" type="button" title="打开调试工具" aria-label="打开调试工具">···</button>
+        </div>
+      </header>
+      <section class="batchControls" aria-label="批量参数">
+        <div class="batchInputs">
+          <label>目标<input id="batch-target" type="number" min="1" max="20" value="3" /></label>
+          <label>最小间隔<input id="batch-interval-min" type="number" min="30" value="45" /></label>
+          <label>最大间隔<input id="batch-interval-max" type="number" min="30" value="90" /></label>
+        </div>
+        <button id="batch-start" type="button" class="primary">开始批量打招呼</button>
+        <button id="batch-continue" type="button" class="primary" hidden>恢复批量</button>
+        <button id="batch-pause" type="button" hidden>暂停批量</button>
       </section>
-      <button id="diagnose-filters" type="button" class="secondary">诊断筛选控件</button>
-      <button id="open-app" type="button" class="secondary">打开本地工具</button>
-      <section id="result" hidden></section>
+      <section id="result" class="resultPanel" hidden></section>
     </main>
     <script src="popup.js"></script>
   </body>
 </html>
-

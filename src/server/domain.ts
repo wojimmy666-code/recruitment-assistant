@@ -12,6 +12,9 @@ export type Job = {
   salary_min: number | null;
   salary_max: number | null;
   active_within: string | null;
+  gender: "男" | "女" | null;
+  age_min: number | null;
+  age_max: number | null;
   exclude_contacted: number;
   created_at: string;
   updated_at: string;
@@ -64,6 +67,9 @@ export type FilterInput = {
   activeWithin?: string;
   salaryMin?: number;
   salaryMax?: number;
+  gender?: "男" | "女";
+  ageMin?: number;
+  ageMax?: number;
   excludeContacted: boolean;
 };
 

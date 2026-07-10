@@ -19,6 +19,9 @@ export type Job = {
   salary_min: number | null;
   salary_max: number | null;
   active_within: string | null;
+  gender: "男" | "女" | null;
+  age_min: number | null;
+  age_max: number | null;
   exclude_contacted: number;
 };
 
@@ -138,10 +141,12 @@ export type RecommendQueueItem = {
   experience: string;
   education: string;
   arrival: string;
+  filterReason: string;
   greetingButtonText: string;
   greetingButtonSelector: string;
   cardSelector: string;
   sourceUrl: string;
+  fingerprint: string;
 };
 
 export type RecommendQueueReport = {
@@ -175,6 +180,7 @@ export type GreetingComposerDiagnostics = {
 };
 export type GreetingActionResult = {
   ok: boolean;
+  outcome: string;
   clicked: boolean;
   reason: string;
   blockedReason: string;
@@ -198,6 +204,14 @@ export type GreetingActionResult = {
   afterGreetingButtonText: string;
   afterGreetingButtonSelector: string;
   afterCardText: string;
+  beforeCardText: string;
+  observedItems: RecommendQueueItem[];
+  skippedItems: RecommendQueueItem[];
+  filteredItems: RecommendQueueItem[];
+  filteredCount: number;
+  skippedCount: number;
+  scannedFingerprints: string[];
+  scrollAttempts: number;
   filled: boolean;
   readyToSend: boolean;
   sent: boolean;
@@ -225,6 +239,15 @@ export type GreetingBatchRecord = {
   messagePreview: string;
   clickResult: GreetingActionResult;
   composerResult: GreetingActionResult;
+  actionResult: GreetingActionResult;
+};
+
+export type GreetingBatchCandidate = {
+  item: RecommendQueueItem;
+  status: "pending" | "already_greeted" | "direct_greeted" | "uncertain" | "blocked" | "failed" | "filtered_out" | "unavailable";
+  message: string;
+  firstSeenAt: string;
+  updatedAt: string;
 };
 
 export type GreetingBatchState = {
@@ -241,12 +264,19 @@ export type GreetingBatchState = {
   queueSize: number;
   selectedJobText: string;
   sourceUrl: string;
+  filterJobId: number | null;
+  filterJobName: string;
+  filterFields: string[];
+  filterWarnings: string[];
+  filterAppliedAt: string;
   attempted: number;
   filled: number;
   failed: number;
   blocked: number;
   skipped: number;
+  filteredOut: number;
   directGreeted: number;
+  candidates: GreetingBatchCandidate[];
   records: GreetingBatchRecord[];
 };
 export type SendLog = {

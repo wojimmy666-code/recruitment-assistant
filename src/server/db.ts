@@ -22,6 +22,9 @@ export function initDb() {
       salary_min INTEGER,
       salary_max INTEGER,
       active_within TEXT,
+      gender TEXT,
+      age_min INTEGER,
+      age_max INTEGER,
       exclude_contacted INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -79,8 +82,18 @@ export function initDb() {
     );
   `);
 
+  ensureJobFilterColumns(db);
   seedDefaults(db);
   return db;
+}
+
+function ensureJobFilterColumns(db: AppDatabase) {
+  const columns = new Set(
+    (db.prepare("PRAGMA table_info(jobs)").all() as Array<{ name: string }>).map((column) => column.name)
+  );
+  if (!columns.has("gender")) db.exec("ALTER TABLE jobs ADD COLUMN gender TEXT");
+  if (!columns.has("age_min")) db.exec("ALTER TABLE jobs ADD COLUMN age_min INTEGER");
+  if (!columns.has("age_max")) db.exec("ALTER TABLE jobs ADD COLUMN age_max INTEGER");
 }
 
 export function getDefaultJob(db: AppDatabase) {

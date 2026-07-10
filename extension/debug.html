@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Recruitment Assistant Debug</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="debugShell">
+      <header>
+        <h1>扩展调试工具</h1>
+        <p id="status">选择一项只读或校准操作。</p>
+      </header>
+      <button id="filter-collect" type="button">筛选并采集</button>
+      <button id="collect" type="button">仅采集当前页</button>
+      <button id="recommend-queue" type="button">采集推荐队列</button>
+      <button id="single-greeting-test" type="button">单人测试打招呼</button>
+      <button id="diagnose-filters" type="button">诊断筛选控件</button>
+      <button id="open-app" type="button">打开本地工具</button>
+      <section id="result" class="resultPanel" hidden></section>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

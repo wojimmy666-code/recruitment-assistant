@@ -40,7 +40,8 @@ MVP 只做一个页面：紧凑操作面板。
 │ - 城市                         │ - 每日上限                     │
 │ - 关键词                       │ - 随机间隔                     │
 │ - 活跃时间                     │ - 开始 / 暂停                  │
-│ - 薪资范围                     │ - 安全暂停提示                 │
+│ - 性别 / 年龄范围              │ - 安全暂停提示                 │
+│ - 薪资范围                     │                              │
 │ - 跳过已联系                   │                              │
 │ - 筛选候选人                   │ 发送记录                      │
 │ - 找到/可发送/已跳过            │ - 时间 / 候选人 / 职位 / 文案 / 状态 │
@@ -70,6 +71,8 @@ MVP 只做一个页面：紧凑操作面板。
 - 城市：输入框或下拉框
 - 关键词：输入框，例如 `奶茶 店员 服务员`
 - 活跃时间：下拉框，例如 `近 3 天活跃`
+- 性别：下拉框，支持不限、男、女
+- 年龄范围：两个数字输入，支持只填写下限或上限
 - 薪资范围：两个数字输入
 - 跳过已联系：checkbox，默认开启
 
@@ -361,6 +364,9 @@ CREATE TABLE IF NOT EXISTS jobs (
   salary_min INTEGER,
   salary_max INTEGER,
   active_within TEXT,
+  gender TEXT,
+  age_min INTEGER,
+  age_max INTEGER,
   exclude_contacted INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -611,6 +617,9 @@ export type FilterInput = {
   activeWithin?: string;
   salaryMin?: number;
   salaryMax?: number;
+  gender?: "男" | "女";
+  ageMin?: number;
+  ageMax?: number;
   excludeContacted: boolean;
 };
 
@@ -1095,14 +1104,15 @@ th {
 
 ### 发送流程
 
-1. 用户选择文案模板。
-2. 用户选择手动或批量模式。
-3. 工具检查今日发送数量。
-4. 工具按 `dailyCap` 限制发送。
-5. 每次发送前检查是否已联系。
-6. 每次发送后写入 `send_logs`。
-7. 批量模式使用随机间隔。
-8. 遇到验证码、登录失效、页面异常，立即暂停。
+1. 用户在已登录的 BOSS 推荐页点击扩展中的 `开始批量打招呼`。
+2. 扩展读取招聘助手中保存的默认职位和筛选条件。
+3. 扩展在 BOSS 推荐列表 frame 中应用全部条件，并等待候选列表刷新。
+4. 任一已保存条件无法确认时停止启动，不点击候选人卡片。
+5. 筛选成功后创建新批次，从刷新后的列表顶部开始处理。
+6. 已显示 `继续沟通` 的候选人直接跳过。
+7. 对可处理候选人点击 `打招呼`，并确认按钮状态发生变化。
+8. 批量模式使用随机间隔，并按目标数量停止。
+9. 遇到验证码、登录失效、页面异常，立即暂停。
 
 ### 定时流程
 

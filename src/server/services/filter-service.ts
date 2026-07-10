@@ -43,6 +43,9 @@ function toFilterInput(job: Job): FilterInput {
     activeWithin: job.active_within ?? undefined,
     salaryMin: job.salary_min ?? undefined,
     salaryMax: job.salary_max ?? undefined,
+    gender: job.gender ?? undefined,
+    ageMin: job.age_min ?? undefined,
+    ageMax: job.age_max ?? undefined,
     excludeContacted: Boolean(job.exclude_contacted)
   };
 }

@@ -12,46 +12,23 @@ type Props = {
 
 export function TemplatePanel({ templates, selectedTemplate, onSelect, onChange, onSave, onCreate }: Props) {
   return (
-    <section className="sectionBlock separated">
-      <h2>固定文案</h2>
+    <section className="drawerSection">
+      <div className="sectionHeading">
+        <div><span className="eyebrow">旧发送设置</span><h2>消息模板</h2></div>
+      </div>
       <label>
-        文案模板
+        模板
         <select value={selectedTemplate.id} onChange={(event) => onSelect(Number(event.target.value))}>
-          {templates.map((template) => (
-            <option key={template.id} value={template.id}>
-              {template.name}
-            </option>
-          ))}
+          {templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
         </select>
       </label>
       <label>
-        文案内容
-        <textarea
-          value={selectedTemplate.body}
-          onChange={(event) => onChange({ ...selectedTemplate, body: event.target.value })}
-        />
+        内容
+        <textarea value={selectedTemplate.body} onChange={(event) => onChange({ ...selectedTemplate, body: event.target.value })} />
       </label>
       <div className="actions">
-        <button type="button" disabled={!selectedTemplate.body.trim()} onClick={onSave}>
-          <Save size={16} />
-          保存文案
-        </button>
-        <button type="button" onClick={onCreate}>
-          <FilePlus size={16} />
-          新建文案
-        </button>
-      </div>
-      <div className="templateList">
-        {templates.map((template) => (
-          <button
-            type="button"
-            className={template.id === selectedTemplate.id ? "listButton active" : "listButton"}
-            key={template.id}
-            onClick={() => onSelect(template.id)}
-          >
-            {template.name}
-          </button>
-        ))}
+        <button className="primary" type="button" disabled={!selectedTemplate.body.trim()} onClick={onSave}><Save size={15} />保存模板</button>
+        <button type="button" onClick={onCreate}><FilePlus size={15} />新建模板</button>
       </div>
     </section>
   );

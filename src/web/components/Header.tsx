@@ -1,35 +1,37 @@
-import { Power, Settings } from "lucide-react";
-import type { RuntimeState } from "../api";
+import { Activity, Settings } from "lucide-react";
+import type { GreetingBatchState } from "../api";
 
 type HeaderProps = {
-  state: RuntimeState | null;
-  onOpenBrowser: () => void;
+  batch: GreetingBatchState | null;
+  onSettings: () => void;
 };
 
-const browserLabels: Record<string, string> = {
-  unknown: "未知",
-  connected: "已连接浏览器",
-  not_connected: "未连接",
-  login_required: "需要登录",
-  paused: "已暂停"
+const batchLabels: Record<string, string> = {
+  running: "运行中",
+  waiting_interval: "等待间隔",
+  paused: "已暂停",
+  completed: "已完成",
+  blocked: "已阻断"
 };
 
-export function Header({ state, onOpenBrowser }: HeaderProps) {
+export function Header({ batch, onSettings }: HeaderProps) {
+  const batchStatus = batch?.status || "idle";
+
   return (
     <header className="topbar">
-      <div>
-        <h1>本地招聘打招呼工具</h1>
-        <p>固定文案、按上限发送、自动记录</p>
+      <div className="brandBlock">
+        <div className="brandIcon"><Activity size={18} /></div>
+        <div>
+          <h1>招聘助手</h1>
+          <p>BOSS 推荐页批量打招呼工作台</p>
+        </div>
       </div>
       <div className="statusbar">
-        <button className="iconButton" type="button" onClick={onOpenBrowser} title="打开受控浏览器">
-          <Power size={17} />
-        </button>
-        <span className={`statusPill ${state?.browserStatus || "unknown"}`}>
-          {browserLabels[state?.browserStatus || "unknown"]}
+        <span className="statusPill connected">本地服务已连接</span>
+        <span className={"statusPill batch-" + batchStatus}>
+          {batch ? "批量" + (batchLabels[batch.status] || batch.status) : "暂无批次"}
         </span>
-        <strong>今日 {state?.todaySent ?? 0}/{state?.dailyCap ?? 20}</strong>
-        <button className="iconButton" type="button" title="设置">
+        <button className="iconButton" type="button" onClick={onSettings} title="设置与诊断" aria-label="设置与诊断">
           <Settings size={17} />
         </button>
       </div>

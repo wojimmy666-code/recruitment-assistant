@@ -1,19 +1,50 @@
+let recommendBatchStepInFlight = false;
+const RECOMMEND_PERSON_CARD_SELECTOR = ".geek-card-small.candidate-card-wrap, .candidate-card-wrap";
+
 if (!globalThis.__recruitmentAssistantBridgeLoaded) {
   globalThis.__recruitmentAssistantBridgeLoaded = true;
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (message?.type !== "COLLECT_CANDIDATES") return false;
-
-    try {
-      const candidates = collectCandidatesFromPage();
-      sendResponse({ ok: true, candidates });
-    } catch (error) {
-      sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
+    if (message?.type === "COLLECT_CANDIDATES") {
+      try {
+        const candidates = collectCandidatesFromPage();
+        sendResponse({ ok: true, candidates });
+      } catch (error) {
+        sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return true;
     }
 
-    return true;
+    if (message?.type === "RECOMMEND_BATCH_STEP") {
+      void processNextRecommendBatchCard(message)
+        .then((result) => sendResponse(result))
+        .catch((error) => sendResponse({
+          ok: false,
+          outcome: "uncertain",
+          clicked: false,
+          reason: error instanceof Error ? error.message : String(error),
+          href: location.href,
+          path: location.pathname
+        }));
+      return true;
+    }
+
+    if (message?.type === "RECOMMEND_APPLY_FILTERS") {
+      void applyRecruitmentFilters(message.job || {})
+        .then((result) => sendResponse(result))
+        .catch((error) => sendResponse({
+          ok: false,
+          applied: false,
+          refreshed: false,
+          reason: error instanceof Error ? error.message : String(error),
+          href: location.href,
+          path: location.pathname
+        }));
+      return true;
+    }
+
+    return false;
   });
 }
-
 function collectCandidatesFromPage() {
   if (!location.href.includes("zhipin.com")) {
     throw new Error("当前页面不是 BOSS。");
@@ -210,6 +241,13 @@ function getCandidateSelectors() {
 function normalizeCandidateCard(element) {
   if (!isChatCandidatePage()) return element;
 
+  if (isRecommendCandidateFrame()) {
+    const personCard = element.matches?.(RECOMMEND_PERSON_CARD_SELECTOR)
+      ? element
+      : element.closest?.(RECOMMEND_PERSON_CARD_SELECTOR);
+    if (personCard) return personCard;
+  }
+
   const stableRoot = element.closest([
     "[data-geek-id]",
     "[data-candidate-id]",
@@ -352,7 +390,10 @@ function findDisplayName(card, rawText) {
 }
 
 function findNameElement(card) {
-  const namedElements = [card, ...Array.from(card.querySelectorAll("[title], .name, .user-name, .geek-name, .candidate-name, .chat-name, .item-name, [class*='name']"))];
+  const namedElements = [
+    ...Array.from(card.querySelectorAll("[title], .name, .user-name, .geek-name, .candidate-name, .chat-name, .item-name, [class*='name']")),
+    card
+  ];
   return namedElements.find((element) => {
     const title = normalizeText(element.getAttribute("title") || element.textContent || "");
     return isUsableDisplayName(title);
@@ -459,10 +500,10 @@ function collectFilterControlDiagnostics() {
     return { ok: false, reason: "not_boss_page", href: location.href, path: location.pathname };
   }
 
-  const inputs = inspectFilterElements("input, textarea, [contenteditable='true']", () => true, 80);
+  const inputs = inspectFilterElements("input, textarea, [contenteditable='true'], [role='slider'], [class*='slider-handle'], [class*='range-handle'], [class*='slider'] [class*='handle'], [class*='slider'] [class*='thumb'], [class*='slider'] [class*='button']", () => true, 100);
   const clickables = inspectFilterElements("button, a, label, li, dt, dd, span, div, [role='button']", hasFilterDiagnosticText, 180);
   const submitControls = clickables.filter((item) => /(确定|确认|完成|应用|筛选|搜索|查看结果|搜索牛人|查找牛人|开始搜索|立即搜索|立即筛选|确认选择)/.test(item.text || item.attrs?.["aria-label"] || item.attrs?.title || ""));
-  const filterControls = clickables.filter((item) => /(关键词|搜索|职位|岗位|牛人|人才|意向|期望|城市|地点|地区|工作地|活跃|活跃度|最近活跃|登录时间|薪资|月薪|薪酬|不限|近\s*\d|K|以上|以下)/i.test(item.text || item.attrs?.placeholder || item.attrs?.["aria-label"] || item.attrs?.title || ""));
+  const filterControls = clickables.filter((item) => /(关键词|搜索|职位|岗位|牛人|人才|意向|期望|城市|地点|地区|工作地|活跃|活跃度|最近活跃|登录时间|性别|年龄|男|女|薪资|月薪|薪酬|不限|近\s*\d|K|以上|以下)/i.test(item.text || item.attrs?.placeholder || item.attrs?.["aria-label"] || item.attrs?.title || ""));
   const candidateContainers = (isChatCandidatePage() ? findCandidateListContainers() : [])
     .slice(0, 20)
     .map((element) => inspectElementForDiagnostics(element));
@@ -522,7 +563,7 @@ function inspectElementForDiagnostics(element) {
 function hasFilterDiagnosticText(element) {
   const text = controlTextForDiagnostics(element);
   if (!text || text.length > 160) return false;
-  return /(搜索|筛选|城市|地区|地点|工作地|活跃|登录|薪资|月薪|期望|确定|确认|完成|应用|查看|牛人|关键词|职位|岗位|不限|近\s*\d|K|以上|以下|重置|清空)/i.test(text);
+  return /(搜索|筛选|城市|地区|地点|工作地|活跃|登录|性别|年龄|男|女|薪资|月薪|期望|确定|确认|完成|应用|查看|牛人|关键词|职位|岗位|不限|近\s*\d|K|以上|以下|重置|清空)/i.test(text);
 }
 
 function controlTextForDiagnostics(element) {
@@ -540,7 +581,7 @@ function collectFilterTextHints() {
   for (const element of visibleControlElements("button, a, label, li, dt, dd, span, div, input, textarea, [contenteditable='true'], [role='button']")) {
     const text = controlTextForDiagnostics(element);
     if (!text || text.length > 80) continue;
-    if (!/(搜索|筛选|城市|地区|地点|工作地|活跃|登录|薪资|月薪|期望|确定|确认|完成|应用|查看|牛人|关键词|职位|岗位|不限|近\s*\d|K|以上|以下|重置|清空)/i.test(text)) continue;
+    if (!/(搜索|筛选|城市|地区|地点|工作地|活跃|登录|性别|年龄|男|女|薪资|月薪|期望|确定|确认|完成|应用|查看|牛人|关键词|职位|岗位|不限|近\s*\d|K|以上|以下|重置|清空)/i.test(text)) continue;
     if (!hints.includes(text)) hints.push(text);
     if (hints.length >= 80) break;
   }
@@ -549,7 +590,7 @@ function collectFilterTextHints() {
 
 function diagnosticAttributes(element) {
   const attrs = {};
-  const allowNames = new Set(["id", "class", "role", "href", "placeholder", "aria-label", "title", "name", "type", "for"]);
+  const allowNames = new Set(["id", "class", "role", "href", "placeholder", "aria-label", "aria-valuemin", "aria-valuemax", "aria-valuenow", "aria-valuetext", "title", "name", "type", "for", "tabindex"]);
   for (const attr of Array.from(element.attributes || [])) {
     if (!allowNames.has(attr.name) && !attr.name.startsWith("data-")) continue;
     if (Object.keys(attrs).length >= 14) break;
@@ -700,6 +741,7 @@ async function applyRecruitmentFilters(job) {
 
   const before = getCandidateListFingerprint();
   const fields = [];
+  const localFilterFields = [];
   const warnings = [];
   const softWarnings = [];
   const recommendFrame = isRecommendCandidateFrame();
@@ -707,71 +749,99 @@ async function applyRecruitmentFilters(job) {
   const keyword = normalizeText(job?.keywords || job?.name || "");
   const city = normalizeText(job?.city || "");
   const activeWithin = normalizeText(job?.active_within || "");
+  const gender = normalizeGenderFilter(job?.gender);
+  const ageRange = normalizeAgeFilterRange(job?.age_min, job?.age_max);
   const salaryOptions = buildSalaryOptions(job?.salary_min, job?.salary_max);
 
-  if (recommendFrame) {
-    const preflightWarnings = getRecommendationPreflightWarnings(job, keyword, city, salaryOptions);
-    if (preflightWarnings.length > 0) {
-      return {
-        ok: false,
-        applied: false,
-        reason: `推荐页当前职位与本地条件不一致，已停止且未继续点击 BOSS 页面：${preflightWarnings.join("；")}。${describeLocalRecommendCriteria(job, salaryOptions)}`,
-        path: location.pathname,
-        before,
-        after: getCandidateListFingerprint(),
-        fields,
-        warnings: preflightWarnings
-      };
-    }
+  if (recommendFrame && selectedJobText && normalizeText(job?.name || "") && !looseTextIncludes(selectedJobText, job.name)) {
+    softWarnings.push(`当前 BOSS 职位为 ${selectedJobText}，仅作为本批次打招呼上下文；候选条件仍按招聘助手设置执行。`);
   }
 
   clickFirstByText(/筛选|过滤|条件|更多条件|基础要求|个性化要求/);
   await waitForUiSettle(500);
+  if (await dismissPreviousFilterPrompt()) {
+    softWarnings.push("已取消套用 BOSS 上次筛选条件，改用招聘助手当前条件。");
+  }
 
   if (keyword) {
     if (fillInputByHints(/关键词|搜索|职位|岗位|牛人|人才|意向|期望/, keyword)) {
       fields.push("关键词");
       await waitForUiSettle(250);
-    } else if (recommendFrame && selectedRecommendationJobMatches(job, keyword)) {
-      fields.push("职位");
-      softWarnings.push(`推荐页没有关键词输入框，已用当前职位匹配：${selectedJobText || "未读取到职位文案"}`);
     } else if (recommendFrame) {
-      warnings.push(`推荐页没有关键词输入框，且当前职位未匹配本地条件：${selectedJobText || "未读取到职位文案"}`);
+      fields.push("关键词（本地校验）");
+      localFilterFields.push("keywords");
+      softWarnings.push("推荐页没有关键词输入框，将在点击前按候选卡片关键词校验。");
     } else {
       warnings.push("未找到关键词输入框");
     }
   }
 
   if (city) {
-    const cityFilled = fillInputByHints(/城市|地点|地区|工作地|期望城市/, city);
-    if (cityFilled) await waitForUiSettle(350);
-    const citySelected = await chooseDropdownOption(/城市|地点|地区|工作地|期望城市|筛选/, city);
-    if (cityFilled || citySelected || (recommendFrame && recommendationCityMatches(city))) {
+    if (recommendFrame && recommendationCityMatches(city)) {
       fields.push("城市");
+      softWarnings.push(`当前 BOSS 职位城市已是 ${city}，保留该职位城市作为推荐上下文。`);
+    } else {
+      const cityFilled = fillInputByHints(/城市|地点|地区|工作地|期望城市/, city);
+      if (cityFilled) await waitForUiSettle(350);
+      const citySelected = await chooseDropdownOption(/城市|地点|地区|工作地|期望城市/, city);
+      if (cityFilled || citySelected) {
+        fields.push("城市");
+      } else {
+        warnings.push("未找到城市筛选控件");
+      }
       if (citySelected) {
         clickScopedConfirmControl(/^(确认|确定|完成)$/);
         await waitForUiSettle(350);
       }
-    } else {
-      warnings.push("未找到城市筛选控件");
     }
   }
 
   if (activeWithin) {
-    if (await chooseDropdownOption(/活跃|活跃度|最近活跃|登录时间/, activeWithin) || clickFirstByText(new RegExp(escapeRegExp(activeWithin)))) {
+    const activeApplied = await chooseExactFilterOption(
+      /活跃|活跃度|最近活跃|登录时间/,
+      buildActiveFilterLabels(activeWithin)
+    );
+    if (activeApplied) {
       fields.push("活跃时间");
       await waitForUiSettle(250);
     } else if (recommendFrame) {
-      softWarnings.push("推荐页未暴露活跃时间筛选控件，已跳过该控件校准。候选卡片仍会保留活跃文案供人工复核。");
+      fields.push("活跃时间（本地校验）");
+      localFilterFields.push("active_within");
+      softWarnings.push("推荐页没有可匹配的活跃时间控件，将在点击前按候选卡片活跃时间校验。");
     } else {
       warnings.push("未找到活跃时间筛选控件");
+    }
+  }
+
+  if (gender) {
+    if (await chooseExactFilterOption(/性别|性别要求/, [gender])) {
+      fields.push("性别");
+      await waitForUiSettle(250);
+    } else {
+      warnings.push(`未找到性别筛选控件或选项 ${gender}`);
+    }
+  }
+
+  if (ageRange.min !== null || ageRange.max !== null) {
+    const ageApplied = fillFilterRangeInputs(/年龄|年龄要求/, ageRange.min, ageRange.max)
+      || await setAgeSliderRange(/年龄|年龄要求/, ageRange.min, ageRange.max)
+      || await chooseExactFilterOption(/年龄|年龄要求/, buildAgeFilterLabels(ageRange.min, ageRange.max));
+    if (ageApplied) {
+      fields.push("年龄");
+      await waitForUiSettle(250);
+    } else if (recommendFrame) {
+      fields.push("年龄（本地校验）");
+      localFilterFields.push("age");
+      softWarnings.push(`未能确认 BOSS 年龄滑块 ${describeAgeRange(ageRange.min, ageRange.max)}，将在点击前按候选卡片年龄校验。`);
+    } else {
+      warnings.push(`未找到可匹配的年龄筛选控件 ${describeAgeRange(ageRange.min, ageRange.max)}`);
     }
   }
 
   if (salaryOptions.length > 0) {
     let salaryApplied = false;
     for (const label of salaryOptions) {
-      if (await chooseDropdownOption(/薪资|月薪|期望薪资|薪酬/, label) || clickFirstByText(new RegExp(escapeRegExp(label), "i"))) {
+      if (await chooseDropdownOption(/薪资|月薪|期望薪资|薪酬/, label)) {
         salaryApplied = true;
         await waitForUiSettle(250);
         break;
@@ -779,11 +849,10 @@ async function applyRecruitmentFilters(job) {
     }
     if (salaryApplied) {
       fields.push("薪资");
-    } else if (recommendFrame && selectedRecommendationSalaryMatches(salaryOptions)) {
-      fields.push("职位薪资");
-      softWarnings.push(`推荐页没有独立薪资筛选控件，已用当前职位薪资匹配：${selectedJobText || "未读取到职位文案"}`);
     } else if (recommendFrame) {
-      warnings.push(`推荐页没有独立薪资筛选控件，且当前职位薪资未匹配本地条件：${selectedJobText || "未读取到职位文案"}`);
+      fields.push("期望薪资（本地校验）");
+      localFilterFields.push("salary");
+      softWarnings.push("推荐页没有独立期望薪资筛选控件，将在点击前按候选卡片薪资校验。");
     } else {
       warnings.push("未找到薪资筛选控件");
     }
@@ -817,13 +886,15 @@ async function applyRecruitmentFilters(job) {
 
   let after = await waitForListFingerprintChange(before, 1200);
   if (after.changed) {
-    return buildApplySuccess({ fields, submitted: "auto", warnings: softWarnings, before, after: after.fingerprint });
+    return buildApplySuccess({ fields, localFilterFields, selectedJobText, submitted: "auto", warnings: softWarnings, before, after: after.fingerprint });
   }
 
-  const submitted = clickSubmitControl() || pressEnterOnFocusedInput();
+  const submitted = recommendFrame
+    ? clickBossFilterConfirmControl()
+    : clickSubmitControl() || pressEnterOnFocusedInput();
   if (!submitted) {
-    if (recommendFrame && recommendationPageCriteriaSatisfied(job, salaryOptions)) {
-      return buildApplySuccess({ fields, submitted: "already-current", warnings: softWarnings, before, after: getCandidateListFingerprint() });
+    if (recommendFrame && recommendationPageCriteriaSatisfied()) {
+      return buildApplySuccess({ fields, localFilterFields, selectedJobText, submitted: "already-current", warnings: softWarnings, before, after: getCandidateListFingerprint() });
     }
 
     return {
@@ -840,8 +911,8 @@ async function applyRecruitmentFilters(job) {
 
   after = await waitForListFingerprintChange(before, 6500);
   if (!after.changed) {
-    if (recommendFrame && recommendationPageCriteriaSatisfied(job, salaryOptions)) {
-      return buildApplySuccess({ fields, submitted: "already-current", warnings: softWarnings, before, after: after.fingerprint });
+    if (recommendFrame && recommendationPageCriteriaSatisfied()) {
+      return buildApplySuccess({ fields, localFilterFields, selectedJobText, submitted: "already-current", warnings: softWarnings, before, after: after.fingerprint });
     }
 
     return {
@@ -856,14 +927,16 @@ async function applyRecruitmentFilters(job) {
     };
   }
 
-  return buildApplySuccess({ fields, submitted, warnings: softWarnings, before, after: after.fingerprint });
+  return buildApplySuccess({ fields, localFilterFields, selectedJobText, submitted, warnings: softWarnings, before, after: after.fingerprint });
 }
 
-function buildApplySuccess({ fields, submitted, warnings, before, after }) {
+function buildApplySuccess({ fields, localFilterFields, selectedJobText, submitted, warnings, before, after }) {
   return {
     ok: true,
     applied: true,
     fields,
+    localFilterFields,
+    selectedJobText,
     submitted,
     refreshed: true,
     warnings,
@@ -871,30 +944,6 @@ function buildApplySuccess({ fields, submitted, warnings, before, after }) {
     before,
     after
   };
-}
-
-function getRecommendationPreflightWarnings(job, keyword, city, salaryOptions) {
-  const selectedText = getSelectedRecommendationJobText();
-  const result = [];
-  if (keyword && !selectedRecommendationJobMatches(job, keyword)) {
-    result.push(`当前 BOSS 职位未匹配本地职位/关键词：${selectedText || "未读取到职位文案"}`);
-  }
-  if (city && selectedText && !recommendationCityMatches(city)) {
-    result.push(`当前 BOSS 职位城市未匹配本地城市 ${city}：${selectedText}`);
-  }
-  if (salaryOptions.length > 0 && !selectedRecommendationSalaryMatches(salaryOptions)) {
-    result.push(`当前 BOSS 职位薪资未匹配本地薪资：${selectedText || "未读取到职位文案"}`);
-  }
-  return result;
-}
-
-function describeLocalRecommendCriteria(job, salaryOptions) {
-  const parts = [];
-  if (normalizeText(job?.name || "")) parts.push(`本地职位 ${normalizeText(job.name)}`);
-  if (normalizeText(job?.keywords || "")) parts.push(`关键词 ${normalizeText(job.keywords)}`);
-  if (normalizeText(job?.city || "")) parts.push(`城市 ${normalizeText(job.city)}`);
-  if (salaryOptions.length > 0) parts.push(`薪资 ${salaryOptions[0]}`);
-  return parts.length > 0 ? `本地条件：${parts.join("，")}。` : "";
 }
 
 function isRecommendCandidateFrame() {
@@ -908,41 +957,13 @@ function getSelectedRecommendationJobText() {
   return candidates[0] || "";
 }
 
-function selectedRecommendationJobMatches(job, keyword) {
-  const selectedText = getSelectedRecommendationJobText();
-  if (!selectedText) return false;
-  const jobName = normalizeText(job?.name || "");
-  if (jobName && looseTextIncludes(selectedText, jobName)) return true;
-
-  const keywordWords = splitMeaningfulWords(keyword);
-  if (keywordWords.length === 0) return false;
-  const matched = keywordWords.filter((word) => selectedText.includes(word)).length;
-  return matched >= Math.min(2, keywordWords.length);
-}
-
-function selectedRecommendationSalaryMatches(salaryOptions) {
-  const selectedText = getSelectedRecommendationJobText();
-  if (!selectedText) return false;
-  return salaryOptions.some((label) => looseTextIncludes(selectedText, label));
-}
-
 function recommendationCityMatches(city) {
   const selectedText = getSelectedRecommendationJobText();
   return Boolean(city) && looseTextIncludes(selectedText, city);
 }
 
-function recommendationPageCriteriaSatisfied(job, salaryOptions) {
-  const keyword = normalizeText(job?.keywords || job?.name || "");
-  const city = normalizeText(job?.city || "");
-  if (keyword && !selectedRecommendationJobMatches(job, keyword)) return false;
-  if (city && !recommendationCityMatches(city)) return false;
-  if (salaryOptions.length > 0 && !selectedRecommendationSalaryMatches(salaryOptions)) return false;
+function recommendationPageCriteriaSatisfied() {
   return findCandidateListContainers().length > 0;
-}
-
-function visiblePageTextMatches(value) {
-  const text = normalizeText(document.body?.textContent || "");
-  return looseTextIncludes(text, value);
 }
 
 function looseTextIncludes(text, value) {
@@ -959,6 +980,7 @@ function splitMeaningfulWords(value) {
 }
 
 function clickScopedConfirmControl(pattern) {
+  const bossDialog = findBossFilterDialog();
   const scopes = visibleControlElements(".trade-entry-warp, .filter-wrap, [class*='filter'], [class*='drop'], [class*='pop'], [class*='dialog']")
     .sort((a, b) => elementArea(a) - elementArea(b));
   for (const scope of scopes) {
@@ -967,7 +989,7 @@ function clickScopedConfirmControl(pattern) {
       .filter((element) => {
         const text = textFromClickable(element);
         pattern.lastIndex = 0;
-        return text && text.length <= 12 && pattern.test(text);
+        return text && text.length <= 12 && pattern.test(text) && !(bossDialog && text === "确定");
       })
       .sort((a, b) => elementArea(a) - elementArea(b))[0];
     if (target) {
@@ -975,7 +997,82 @@ function clickScopedConfirmControl(pattern) {
       return true;
     }
   }
+  if (bossDialog) return false;
   return clickFirstByText(pattern);
+}
+
+function findBossFilterDialog() {
+  const headings = visibleControlElements("h1, h2, h3, header, strong, span, div")
+    .filter((element) => {
+      const text = normalizeText(element.textContent || "");
+      return text.startsWith("筛选条件") && text.length <= 40;
+    })
+    .sort((a, b) => elementArea(a) - elementArea(b));
+
+  for (const heading of headings) {
+    let current = heading.parentElement;
+    for (let depth = 0; current && depth < 10; depth += 1, current = current.parentElement) {
+      const text = normalizeText(current.textContent || "");
+      if (!text.includes("年龄") || !text.includes("性别")) continue;
+      if (findTextControlWithin(current, /^(确定|确认)$/)) return current;
+    }
+  }
+  return null;
+}
+
+async function dismissPreviousFilterPrompt() {
+  const root = findBossFilterDialog() || document.body;
+  const messages = Array.from(root.querySelectorAll("div, section, aside, p, span"))
+    .filter(isControlVisible)
+    .filter((element) => {
+      const text = normalizeText(element.textContent || "");
+      return text.includes("是否应用上次的筛选条件") && text.length <= 180;
+    })
+    .sort((a, b) => elementArea(a) - elementArea(b));
+
+  for (const message of messages) {
+    let current = message;
+    for (let depth = 0; current && depth < 5; depth += 1, current = current.parentElement) {
+      const cancel = findTextControlWithin(current, /^取消$/);
+      if (!cancel) continue;
+      clickElement(cancel);
+      await waitForUiSettle(250);
+      return true;
+    }
+  }
+  return false;
+}
+
+function clickBossFilterConfirmControl() {
+  const dialog = findBossFilterDialog();
+  if (!dialog) return false;
+
+  const controls = Array.from(dialog.querySelectorAll("button, a, [role='button'], input[type='button'], input[type='submit'], span, div"))
+    .filter(isControlVisible)
+    .filter((element) => !isDisabled(element))
+    .map((element) => ({ element, text: textFromClickable(element), rect: element.getBoundingClientRect() }))
+    .filter((item) => /^(确定|确认|完成)$/.test(item.text))
+    .sort((a, b) => {
+      const exactDifference = Number(b.text === "确定") - Number(a.text === "确定");
+      if (exactDifference !== 0) return exactDifference;
+      if (b.rect.top !== a.rect.top) return b.rect.top - a.rect.top;
+      return elementArea(a.element) - elementArea(b.element);
+    });
+  if (!controls[0]) return false;
+  clickElement(controls[0].element);
+  return true;
+}
+
+function findTextControlWithin(root, pattern) {
+  const candidates = Array.from(root.querySelectorAll("button, a, label, li, span, div, [role='button'], input[type='button'], input[type='submit']"))
+    .filter(isControlVisible)
+    .filter((element) => {
+      const text = textFromClickable(element);
+      pattern.lastIndex = 0;
+      return text && text.length <= 40 && pattern.test(text);
+    })
+    .sort((a, b) => elementArea(a) - elementArea(b));
+  return candidates[0] || null;
 }
 function fillInputByHints(pattern, value) {
   const controls = visibleControlElements("input, textarea, [contenteditable='true']")
@@ -993,17 +1090,464 @@ function fillInputByHints(pattern, value) {
 }
 
 async function chooseDropdownOption(triggerPattern, optionText) {
-  const trigger = findClickableByText(triggerPattern) || findControlContainerByText(triggerPattern);
-  if (trigger) {
-    clickElement(trigger);
-    await waitForUiSettle(350);
-  }
-
   const optionPatterns = [new RegExp(escapeRegExp(optionText), "i"), looseTextPattern(optionText)];
   for (const pattern of optionPatterns) {
-    if (clickFirstByText(pattern)) return true;
+    if (clickFilterOptionByText(pattern)) return true;
+  }
+
+  const trigger = findFilterControlByText(triggerPattern);
+  if (!trigger) return false;
+  clickElement(trigger);
+  await waitForUiSettle(350);
+
+  for (const pattern of optionPatterns) {
+    if (clickFilterOptionByText(pattern)) return true;
   }
   return false;
+}
+
+function findFilterControlByText(pattern) {
+  const scopes = visibleControlElements(".trade-entry-warp, .filter-wrap, [class*='filter'], [class*='drop'], [class*='pop'], [class*='dialog']")
+    .sort((a, b) => elementArea(a) - elementArea(b));
+  for (const scope of scopes) {
+    const control = Array.from(scope.querySelectorAll("button, a, label, li, dt, dd, span, div, [role='button']"))
+      .filter(isControlVisible)
+      .filter((element) => {
+        const text = textFromClickable(element);
+        pattern.lastIndex = 0;
+        return text && text.length <= 80 && pattern.test(text);
+      })
+      .sort((a, b) => elementArea(a) - elementArea(b))[0];
+    if (control) return control;
+  }
+  return null;
+}
+
+function clickFilterOptionByText(pattern) {
+  const scopes = visibleControlElements(".trade-entry-warp, .filter-wrap, [class*='filter'], [class*='drop'], [class*='pop'], [class*='dialog']")
+    .sort((a, b) => elementArea(a) - elementArea(b));
+  for (const scope of scopes) {
+    const option = Array.from(scope.querySelectorAll("button, a, label, li, dd, span, div, [role='button'], [role='option']"))
+      .filter(isControlVisible)
+      .filter((element) => {
+        const text = textFromClickable(element);
+        pattern.lastIndex = 0;
+        return text && text.length <= 80 && pattern.test(text);
+      })
+      .sort((a, b) => elementArea(a) - elementArea(b))[0];
+    if (!option) continue;
+    if (!isSelectedFilterOption(option)) clickElement(option);
+    return true;
+  }
+  return false;
+}
+
+async function chooseExactFilterOption(groupPattern, optionTexts) {
+  let option = findExactFilterOption(groupPattern, optionTexts);
+  if (!option) {
+    const trigger = findClickableByText(groupPattern) || findControlContainerByText(groupPattern);
+    if (trigger) {
+      clickElement(trigger);
+      await waitForUiSettle(350);
+      option = findExactFilterOption(groupPattern, optionTexts);
+    }
+  }
+  if (!option) return false;
+  if (!isSelectedFilterOption(option)) clickElement(option);
+  return true;
+}
+
+function findExactFilterOption(groupPattern, optionTexts) {
+  const expected = new Set(optionTexts.map(normalizeFilterOptionText).filter(Boolean));
+  if (expected.size === 0) return null;
+
+  for (const scope of findFilterGroupScopes(groupPattern)) {
+    const option = Array.from(scope.querySelectorAll("button, a, label, li, dd, span, div, [role='button'], [role='option']"))
+      .filter(isControlVisible)
+      .filter((element) => expected.has(normalizeFilterOptionText(textFromClickable(element))))
+      .sort((a, b) => elementArea(a) - elementArea(b))[0];
+    if (option) return option;
+  }
+  return null;
+}
+
+function fillFilterRangeInputs(groupPattern, minValue, maxValue) {
+  for (const scope of findFilterGroupScopes(groupPattern)) {
+    const inputs = Array.from(scope.querySelectorAll("input"))
+      .filter(isControlVisible)
+      .filter((element) => !isDisabled(element) && !/^(checkbox|radio|button|submit)$/i.test(element.type || ""));
+    if (inputs.length === 0) continue;
+
+    let minInput = inputs.find((input) => scoreControlByHint(input, /最低|最小|起始|从/) > 0) || null;
+    let maxInput = inputs.find((input) => scoreControlByHint(input, /最高|最大|结束|至/) > 0) || null;
+    if (!minInput && minValue !== null) minInput = inputs[0] || null;
+    if (!maxInput && maxValue !== null) maxInput = inputs.find((input) => input !== minInput) || inputs[inputs.length - 1] || null;
+    if (minValue !== null && !minInput) continue;
+    if (maxValue !== null && (!maxInput || (minValue !== null && maxInput === minInput))) continue;
+
+    if (minValue !== null && minInput) setControlValue(minInput, String(minValue));
+    if (maxValue !== null && maxInput) setControlValue(maxInput, String(maxValue));
+    const minMatches = minValue === null || Number(readControlValue(minInput)) === minValue;
+    const maxMatches = maxValue === null || Number(readControlValue(maxInput)) === maxValue;
+    if (minMatches && maxMatches) return true;
+  }
+  return false;
+}
+
+async function setAgeSliderRange(groupPattern, minValue, maxValue) {
+  const scopes = findFilterGroupScopes(groupPattern);
+  let attempts = 0;
+
+  for (const scope of scopes) {
+    const handles = findAgeSliderHandles(scope);
+    if (handles.length < 2) continue;
+    attempts += 1;
+    if (attempts > 4) break;
+
+    const lowerHandle = handles[0];
+    const upperHandle = handles[handles.length - 1];
+    if (lowerHandle instanceof HTMLInputElement && upperHandle instanceof HTMLInputElement) {
+      if (minValue !== null) setControlValue(lowerHandle, String(minValue));
+      if (maxValue !== null) setControlValue(upperHandle, String(maxValue));
+      await waitForUiSettle(150);
+    } else {
+      if (minValue !== null) await setAgeSliderHandleWithKeyboard(scope, lowerHandle, minValue, 16);
+      if (maxValue !== null) await setAgeSliderHandleWithKeyboard(scope, upperHandle, maxValue, minValue ?? 16);
+      else await moveSliderHandleToBoundary(upperHandle, "End");
+    }
+
+    await waitForUiSettle(180);
+    if (ageSliderMatchesRange(scope, handles, minValue, maxValue)) return true;
+    if (await setAgeSliderRangeByPointer(scope, handles, minValue, maxValue)) return true;
+  }
+  return false;
+}
+
+function findAgeSliderHandles(scope) {
+  const nativeRanges = Array.from(scope.querySelectorAll("input[type='range']"))
+    .filter(isControlVisible);
+  if (nativeRanges.length >= 2) return nativeRanges.slice(0, 2);
+
+  const selectors = [
+    "[role='slider']",
+    "[class*='slider-handle']",
+    "[class*='slider_handle']",
+    "[class*='range-handle']",
+    "[class*='range_handle']",
+    "[class*='slider'] [class*='handle']",
+    "[class*='slider'] [class*='thumb']",
+    "[class*='slider'] [class*='button']",
+    "[class*='range'] [class*='handle']",
+    "[class*='range'] [class*='thumb']"
+  ];
+  const candidates = Array.from(scope.querySelectorAll(selectors.join(", ")))
+    .filter(isControlVisible)
+    .filter((element) => {
+      const rect = element.getBoundingClientRect();
+      return rect.width >= 4 && rect.height >= 4 && rect.width <= 100 && rect.height <= 100;
+    })
+    .map((element) => ({
+      element,
+      rect: element.getBoundingClientRect(),
+      score: sliderHandleScore(element)
+    }))
+    .sort((a, b) => b.score - a.score || elementArea(a.element) - elementArea(b.element));
+  const unique = [];
+  for (const candidate of candidates) {
+    const centerX = candidate.rect.left + candidate.rect.width / 2;
+    const centerY = candidate.rect.top + candidate.rect.height / 2;
+    if (unique.some((item) => Math.abs(item.centerX - centerX) <= 6 && Math.abs(item.centerY - centerY) <= 6)) continue;
+    unique.push({ ...candidate, centerX, centerY });
+  }
+  return unique
+    .sort((a, b) => a.centerX - b.centerX)
+    .map((item) => item.element);
+}
+
+function sliderHandleScore(element) {
+  const className = String(element.className || "");
+  if (element.getAttribute("role") === "slider") return 100;
+  if (element.getAttribute("tabindex") !== null) return 80;
+  if (/handle|thumb/i.test(className)) return 60;
+  if (/button/i.test(className)) return 40;
+  return 10;
+}
+
+async function setAgeSliderHandleWithKeyboard(scope, handle, targetValue, fallbackMinimum) {
+  if (!Number.isFinite(targetValue)) return false;
+  handle.focus?.();
+  dispatchSliderKey(handle, "Home");
+  await waitForUiSettle(40);
+
+  let currentValue = readSliderNumericValue(handle);
+  if (!Number.isFinite(currentValue)) currentValue = readAgeValueNearHandle(scope, handle);
+  if (!Number.isFinite(currentValue) || currentValue > targetValue) {
+    for (let index = 0; index < 70; index += 1) {
+      dispatchSliderKey(handle, "ArrowLeft");
+      if (index % 10 === 9) await waitForUiSettle(15);
+    }
+    currentValue = readSliderNumericValue(handle);
+    if (!Number.isFinite(currentValue)) currentValue = readAgeValueNearHandle(scope, handle);
+  }
+  if (!Number.isFinite(currentValue)) currentValue = fallbackMinimum;
+
+  const delta = Math.round(targetValue - currentValue);
+  if (Math.abs(delta) > 70) return false;
+  const key = delta >= 0 ? "ArrowRight" : "ArrowLeft";
+  for (let index = 0; index < Math.abs(delta); index += 1) {
+    dispatchSliderKey(handle, key);
+    if (index % 10 === 9) await waitForUiSettle(15);
+  }
+  await waitForUiSettle(80);
+  return true;
+}
+
+async function moveSliderHandleToBoundary(handle, key) {
+  handle.focus?.();
+  dispatchSliderKey(handle, key);
+  await waitForUiSettle(80);
+}
+
+function dispatchSliderKey(element, key) {
+  const code = key === "ArrowLeft" ? 37 : key === "ArrowRight" ? 39 : key === "Home" ? 36 : 35;
+  element.dispatchEvent(new KeyboardEvent("keydown", { key, code: key, keyCode: code, which: code, bubbles: true, cancelable: true }));
+  element.dispatchEvent(new KeyboardEvent("keyup", { key, code: key, keyCode: code, which: code, bubbles: true, cancelable: true }));
+}
+
+function readSliderNumericValue(element) {
+  const values = [
+    element instanceof HTMLInputElement ? element.value : "",
+    element.getAttribute("aria-valuenow"),
+    element.getAttribute("data-value"),
+    element.getAttribute("aria-valuetext")
+  ];
+  for (const value of values) {
+    const match = String(value || "").match(/\d{1,2}/);
+    if (match) return Number(match[0]);
+  }
+  return null;
+}
+
+function readAgeValueNearHandle(scope, handle) {
+  const handleRect = handle.getBoundingClientRect();
+  const centerX = handleRect.left + handleRect.width / 2;
+  const centerY = handleRect.top + handleRect.height / 2;
+  const candidates = collectAgeValueElements(scope)
+    .map((element) => {
+      const rect = element.getBoundingClientRect();
+      const value = normalizeText(element.textContent || "");
+      return {
+        value: value === "不限" ? Number.POSITIVE_INFINITY : Number(value),
+        distance: Math.abs(rect.left + rect.width / 2 - centerX) + Math.abs(rect.top + rect.height / 2 - centerY)
+      };
+    })
+    .filter((item) => Number.isFinite(item.value) || item.value === Number.POSITIVE_INFINITY)
+    .sort((a, b) => a.distance - b.distance);
+  return candidates[0]?.value ?? null;
+}
+
+function collectAgeValueElements(scope) {
+  return Array.from(scope.querySelectorAll("output, span, div, p, strong"))
+    .filter(isControlVisible)
+    .filter((element) => {
+      const text = normalizeText(element.textContent || "");
+      if (!/^(?:1[6-9]|[2-6]\d|70|不限)$/.test(text)) return false;
+      return Array.from(element.children).every((child) => !normalizeText(child.textContent || ""));
+    });
+}
+
+function ageSliderMatchesRange(scope, handles, minValue, maxValue) {
+  const handleValues = handles.map(readSliderNumericValue);
+  if (handleValues.length >= 2 && handleValues.every(Number.isFinite)) {
+    const minMatches = minValue === null || handleValues[0] === minValue;
+    const maxMatches = maxValue === null || handleValues[handleValues.length - 1] === maxValue;
+    if (minMatches && maxMatches) return true;
+  }
+
+  const texts = collectAgeValueElements(scope).map((element) => normalizeText(element.textContent || ""));
+  const minMatches = minValue === null || texts.includes(String(minValue));
+  const maxMatches = maxValue === null ? texts.includes("不限") : texts.includes(String(maxValue));
+  return minMatches && maxMatches;
+}
+
+async function setAgeSliderRangeByPointer(scope, handles, minValue, maxValue) {
+  const track = findAgeSliderTrack(scope, handles);
+  if (!track) return false;
+  const trackRect = track.getBoundingClientRect();
+  const bounds = readAgeSliderBounds(handles);
+
+  if (minValue !== null) {
+    dragSliderHandleToValue(handles[0], trackRect, minValue, bounds.min, bounds.max);
+    await waitForUiSettle(100);
+  }
+  if (maxValue !== null) {
+    dragSliderHandleToValue(handles[handles.length - 1], trackRect, maxValue, bounds.min, bounds.max);
+    await waitForUiSettle(120);
+  }
+  return ageSliderMatchesRange(scope, handles, minValue, maxValue);
+}
+
+function findAgeSliderTrack(scope, handles) {
+  const candidates = Array.from(scope.querySelectorAll("[class*='slider-track'], [class*='slider-rail'], [class*='slider-runway'], [class*='range-track'], [class*='slider'], [class*='range']"))
+    .filter(isControlVisible)
+    .map((element) => ({ element, rect: element.getBoundingClientRect(), className: String(element.className || "") }))
+    .filter((item) => item.rect.width >= 120 && item.rect.height <= 90)
+    .sort((a, b) => {
+      const aSpecific = /track|rail|runway/i.test(a.className) ? 1 : 0;
+      const bSpecific = /track|rail|runway/i.test(b.className) ? 1 : 0;
+      return bSpecific - aSpecific || b.rect.width - a.rect.width;
+    });
+  if (candidates[0]) return candidates[0].element;
+
+  let current = handles[0]?.parentElement || null;
+  while (current && current !== scope.parentElement) {
+    const rect = current.getBoundingClientRect();
+    if (handles.every((handle) => current.contains(handle)) && rect.width >= 120 && rect.height <= 90) return current;
+    current = current.parentElement;
+  }
+  return null;
+}
+
+function readAgeSliderBounds(handles) {
+  const mins = handles.map((handle) => readSliderBound(handle, "min")).filter(Number.isFinite);
+  const maxes = handles.map((handle) => readSliderBound(handle, "max")).filter(Number.isFinite);
+  return {
+    min: mins.length > 0 ? Math.min(...mins) : 16,
+    max: maxes.length > 0 ? Math.max(...maxes) : 60
+  };
+}
+
+function readSliderBound(handle, bound) {
+  const ariaName = bound === "min" ? "aria-valuemin" : "aria-valuemax";
+  const rawValue = handle.getAttribute(ariaName)
+    || (handle instanceof HTMLInputElement ? handle[bound] : "");
+  if (rawValue === null || rawValue === undefined || rawValue === "") return Number.NaN;
+  return Number(rawValue);
+}
+
+function dragSliderHandleToValue(handle, trackRect, value, minValue, maxValue) {
+  const ratio = Math.max(0, Math.min(1, (value - minValue) / Math.max(1, maxValue - minValue)));
+  const handleRect = handle.getBoundingClientRect();
+  const startX = handleRect.left + handleRect.width / 2;
+  const startY = handleRect.top + handleRect.height / 2;
+  const targetX = trackRect.left + trackRect.width * ratio;
+  const targetY = trackRect.top + trackRect.height / 2;
+  dispatchDragEvent(handle, "pointerdown", startX, startY, 1);
+  dispatchDragEvent(document, "pointermove", targetX, targetY, 1);
+  dispatchDragEvent(document, "pointerup", targetX, targetY, 0);
+  dispatchDragEvent(handle, "mousedown", startX, startY, 1);
+  dispatchDragEvent(document, "mousemove", targetX, targetY, 1);
+  dispatchDragEvent(document, "mouseup", targetX, targetY, 0);
+}
+
+function dispatchDragEvent(target, type, clientX, clientY, buttons) {
+  const Constructor = type.startsWith("pointer") && typeof PointerEvent !== "undefined" ? PointerEvent : MouseEvent;
+  target.dispatchEvent(new Constructor(type, {
+    bubbles: true,
+    cancelable: true,
+    view: window,
+    clientX,
+    clientY,
+    buttons,
+    pointerId: 1,
+    pointerType: "mouse"
+  }));
+}
+
+function findFilterGroupScopes(pattern) {
+  const classScopes = visibleControlElements(".trade-entry-warp, .filter-wrap, .recommend-filter, [class*='filter'], [class*='drop'], [class*='pop'], [class*='dialog']")
+    .filter((element) => {
+      const text = normalizeText(element.textContent || "");
+      pattern.lastIndex = 0;
+      return text && text.length <= 2000 && pattern.test(text);
+    });
+  const semanticScopes = findSemanticFilterGroupScopes(pattern);
+  return Array.from(new Set([...classScopes, ...semanticScopes]))
+    .sort((a, b) => elementArea(a) - elementArea(b));
+}
+
+function findSemanticFilterGroupScopes(pattern) {
+  const root = findBossFilterDialog() || document.body;
+  const labels = Array.from(root.querySelectorAll("div, section, article, li, dl, dt, dd, label, p, span, strong"))
+    .filter(isControlVisible)
+    .filter((element) => {
+      const text = normalizeText(element.textContent || "");
+      pattern.lastIndex = 0;
+      return text && text.length <= 80 && pattern.test(text);
+    })
+    .sort((a, b) => elementArea(a) - elementArea(b));
+  const scopes = [];
+
+  for (const label of labels) {
+    let current = label;
+    for (let depth = 0; current && depth < 8; depth += 1, current = current.parentElement) {
+      const text = normalizeText(current.textContent || "");
+      pattern.lastIndex = 0;
+      if (text && text.length <= 2500 && pattern.test(text)) scopes.push(current);
+      if (current === root) break;
+    }
+  }
+  return Array.from(new Set(scopes));
+}
+
+function isSelectedFilterOption(element) {
+  const className = [element, element.parentElement, element.parentElement?.parentElement]
+    .map((current) => String(current?.className || ""))
+    .join(" ");
+  return element.getAttribute("aria-selected") === "true"
+    || element.getAttribute("aria-checked") === "true"
+    || (!/(^|[\s_-])(inactive|unselected|unchecked)([\s_-]|$)/i.test(className)
+      && /(^|[\s_-])(active|selected|checked|current|chosen|on)([\s_-]|$)/i.test(className));
+}
+
+function normalizeFilterOptionText(value) {
+  return normalizeText(value)
+    .replace(/\s+/g, "")
+    .replace(/周岁/g, "岁")
+    .replace(/[~～至]/g, "-");
+}
+
+function normalizeGenderFilter(value) {
+  const gender = normalizeText(value || "");
+  return gender === "男" || gender === "女" ? gender : "";
+}
+
+function buildActiveFilterLabels(value) {
+  const normalized = normalizeText(value || "").replace(/\s+/g, "");
+  const labels = [normalized];
+  if (/1天|1日/.test(normalized)) labels.push("近1天活跃", "1日内活跃", "今日活跃", "今天活跃");
+  if (/3天|3日/.test(normalized)) labels.push("近3天活跃", "3日内活跃", "三日内活跃");
+  if (/7天|7日/.test(normalized)) labels.push("近7天活跃", "7日内活跃", "一周内活跃", "本周活跃");
+  return Array.from(new Set(labels.filter(Boolean)));
+}
+
+function normalizeAgeFilterRange(minValue, maxValue) {
+  return {
+    min: normalizeAgeFilterValue(minValue),
+    max: normalizeAgeFilterValue(maxValue)
+  };
+}
+
+function normalizeAgeFilterValue(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const age = Number(value);
+  return Number.isInteger(age) && age >= 16 && age <= 70 ? age : null;
+}
+
+function buildAgeFilterLabels(minValue, maxValue) {
+  if (minValue !== null && maxValue !== null) {
+    return [`${minValue}-${maxValue}岁`, `${minValue}至${maxValue}岁`, `${minValue}~${maxValue}岁`, `${minValue}-${maxValue}`];
+  }
+  if (minValue !== null) return [`${minValue}岁以上`, `${minValue}以上`, `${minValue}+`];
+  if (maxValue !== null) return [`${maxValue}岁以下`, `${maxValue}以下`];
+  return [];
+}
+
+function describeAgeRange(minValue, maxValue) {
+  if (minValue !== null && maxValue !== null) return `${minValue}-${maxValue}岁`;
+  if (minValue !== null) return `${minValue}岁以上`;
+  if (maxValue !== null) return `${maxValue}岁以下`;
+  return "不限";
 }
 
 function clickSubmitControl() {
@@ -1257,6 +1801,7 @@ function collectRecommendQueueFromPage() {
       experience: fields.experience,
       education: fields.education,
       arrival: fields.arrival,
+      filterReason: "",
       greetingButtonText: greeting?.text || "",
       greetingButtonSelector: greeting?.selector || "",
       cardSelector: diagnosticSelector(card),
@@ -1291,16 +1836,25 @@ function findRecommendQueueFallbackContainers() {
 function findRecommendQueueCards(scopes) {
   const searchScopes = scopes.length > 0 ? scopes : [document];
   const cards = [];
-  const selector = "li.card-item, .card-item, [data-geek-id], [data-candidate-id], [data-uid], [data-user-id], [data-userid]";
+  const preciseCards = [];
 
   for (const scope of searchScopes) {
-    for (const element of scope.querySelectorAll(selector)) {
-      const card = normalizeCandidateCard(element);
-      if (!card || cards.includes(card) || !isVisible(card)) continue;
-      const text = normalizeText(card.textContent || "");
-      if (!looksLikeRecommendQueueCard(text)) continue;
-      cards.push(card);
+    for (const element of scope.querySelectorAll(RECOMMEND_PERSON_CARD_SELECTOR)) {
+      if (!preciseCards.includes(element)) preciseCards.push(element);
     }
+  }
+
+  const fallbackSelector = "li.card-item, .card-item, [data-geek-id], [data-candidate-id], [data-uid], [data-user-id], [data-userid]";
+  const elements = preciseCards.length > 0
+    ? preciseCards
+    : searchScopes.flatMap((scope) => Array.from(scope.querySelectorAll(fallbackSelector)));
+
+  for (const element of elements) {
+    const card = normalizeCandidateCard(element);
+    if (!card || cards.includes(card) || !isVisible(card)) continue;
+    const text = normalizeText(card.textContent || "");
+    if (!looksLikeRecommendQueueCard(text)) continue;
+    cards.push(card);
   }
 
   return removeNestedCards(cards);
@@ -1348,6 +1902,647 @@ function firstRecommendMatch(text, patterns) {
   return "";
 }
 
+async function processNextRecommendBatchCard(options = {}) {
+  if (recommendBatchStepInFlight) {
+    return recommendBatchResultBase({
+      outcome: "uncertain",
+      reason: "上一次打招呼动作仍在执行，已暂停避免重复点击。"
+    });
+  }
+  if (!location.href.includes("zhipin.com") || !isRecommendCandidateFrame()) {
+    return recommendBatchResultBase({
+      outcome: "uncertain",
+      reason: "当前 frame 不是 BOSS 推荐列表。"
+    });
+  }
+
+  recommendBatchStepInFlight = true;
+  try {
+    if (options.resetToTop) await resetRecommendListPosition();
+
+    const blockedReason = detectGreetingBlockedReason();
+    if (blockedReason) {
+      return recommendBatchResultBase({
+        outcome: "blocked",
+        blockedReason,
+        reason: blockedReason
+      });
+    }
+
+    const processed = new Set(Array.isArray(options.processedFingerprints) ? options.processedFingerprints.filter(Boolean) : []);
+    const visitedThisStep = new Set();
+    const scannedFingerprints = [];
+    const skippedItems = [];
+    const filteredItems = [];
+    const observedItems = [];
+    let previousSignature = "";
+    let unchangedScrolls = 0;
+    let scrollAttempts = 0;
+
+    for (let pass = 0; pass <= 4; pass += 1) {
+      const cards = currentRecommendBatchCards();
+      const visibleItems = cards.map((card, index) => recommendBatchItemFromCard(card, index));
+      for (const visibleItem of visibleItems) upsertObservedRecommendBatchItem(observedItems, visibleItem);
+      for (let index = 0; index < cards.length; index += 1) {
+        let card = cards[index];
+        let item = visibleItems[index];
+        if (!item.fingerprint || processed.has(item.fingerprint) || visitedThisStep.has(item.fingerprint)) continue;
+        visitedThisStep.add(item.fingerprint);
+
+        if (findExactRecommendActionControl(card, "继续沟通")) {
+          item = { ...item, greetingButtonText: "继续沟通" };
+          scannedFingerprints.push(item.fingerprint);
+          skippedItems.push(item);
+          continue;
+        }
+
+        const localFilterResult = evaluateLocalCandidateFilters(item, options.job || {}, options.localFilterFields);
+        if (!localFilterResult.matched) {
+          item = { ...item, filterReason: localFilterResult.reason };
+          upsertObservedRecommendBatchItem(observedItems, item);
+          scannedFingerprints.push(item.fingerprint);
+          filteredItems.push(item);
+          continue;
+        }
+
+        let greeting = findExactRecommendActionControl(card, "打招呼");
+        if (!greeting) continue;
+
+        card.scrollIntoView?.({ block: "center", inline: "nearest" });
+        await waitForUiSettle(450);
+
+        if (!card.isConnected) {
+          card = findRecommendCardByFingerprint(item.fingerprint);
+        }
+        if (!card) {
+          return recommendBatchResultBase({
+            outcome: "uncertain",
+            reason: "候选人卡片在点击前重新渲染，未执行点击。",
+            item,
+            scannedFingerprints,
+            skippedItems,
+            filteredItems,
+            observedItems,
+            scrollAttempts
+          });
+        }
+
+        const alreadyGreeted = findExactRecommendActionControl(card, "继续沟通");
+        if (alreadyGreeted) {
+          item = recommendBatchItemFromCard(card, index);
+          item.greetingButtonText = "继续沟通";
+          upsertObservedRecommendBatchItem(observedItems, item);
+          scannedFingerprints.push(item.fingerprint);
+          skippedItems.push(item);
+          continue;
+        }
+
+        greeting = findExactRecommendActionControl(card, "打招呼");
+        if (!greeting) {
+          return recommendBatchResultBase({
+            outcome: "uncertain",
+            reason: "候选人操作按钮在点击前发生变化，未执行点击。",
+            item,
+            scannedFingerprints,
+            skippedItems,
+            filteredItems,
+            observedItems,
+            scrollAttempts
+          });
+        }
+
+        const beforeCardText = truncateDiagnosticText(card.textContent || "", 260);
+        clickElement(greeting.element);
+        const verification = await waitForRecommendCardGreetingState(card, item.fingerprint, 8000);
+
+        if (verification.blockedReason) {
+          return recommendBatchResultBase({
+            outcome: "blocked",
+            clicked: true,
+            blockedReason: verification.blockedReason,
+            reason: verification.blockedReason,
+            item,
+            scannedFingerprints,
+            skippedItems,
+            filteredItems,
+            observedItems,
+            scrollAttempts,
+            greetingButtonText: greeting.text,
+            greetingButtonSelector: greeting.selector,
+            afterGreetingButtonText: verification.actionText,
+            afterCardText: verification.cardText,
+            beforeCardText
+          });
+        }
+
+        if (verification.confirmed) {
+          scannedFingerprints.push(item.fingerprint);
+          return recommendBatchResultBase({
+            outcome: "direct_greeted",
+            clicked: true,
+            directGreetingDetected: true,
+            reason: "",
+            item,
+            scannedFingerprints,
+            skippedItems,
+            filteredItems,
+            observedItems,
+            scrollAttempts,
+            greetingButtonText: greeting.text,
+            greetingButtonSelector: greeting.selector,
+            afterGreetingButtonText: "继续沟通",
+            afterGreetingButtonSelector: verification.selector,
+            afterCardText: verification.cardText,
+            beforeCardText
+          });
+        }
+
+        return recommendBatchResultBase({
+          outcome: "uncertain",
+          clicked: true,
+          reason: "已点击打招呼，但 8 秒内同一张卡片未变为“继续沟通”，已暂停避免重复点击。",
+          item,
+          scannedFingerprints: [...scannedFingerprints, item.fingerprint],
+          skippedItems,
+          filteredItems,
+          observedItems,
+          scrollAttempts,
+          greetingButtonText: greeting.text,
+          greetingButtonSelector: greeting.selector,
+          afterGreetingButtonText: verification.actionText,
+          afterGreetingButtonSelector: verification.selector,
+          afterCardText: verification.cardText,
+          beforeCardText
+        });
+      }
+
+      if (pass === 4) break;
+      const signatureBeforeScroll = recommendBatchCardSignature();
+      const scrollResult = scrollRecommendListForward();
+      if (!scrollResult.moved) break;
+      scrollAttempts += 1;
+      await waitForUiSettle(1600 + Math.floor(Math.random() * 900));
+      const signatureAfterScroll = recommendBatchCardSignature();
+      if (signatureAfterScroll === signatureBeforeScroll || signatureAfterScroll === previousSignature) {
+        unchangedScrolls += 1;
+      } else {
+        unchangedScrolls = 0;
+      }
+      previousSignature = signatureAfterScroll;
+      if (unchangedScrolls >= 2) break;
+    }
+
+    return recommendBatchResultBase({
+      outcome: "exhausted",
+      reason: "当前推荐列表没有更多符合条件且未打招呼的候选人。",
+      scannedFingerprints,
+      skippedItems,
+      filteredItems,
+      observedItems,
+      scrollAttempts
+    });
+  } finally {
+    recommendBatchStepInFlight = false;
+  }
+}
+
+function recommendBatchResultBase(values = {}) {
+  const skippedItems = Array.isArray(values.skippedItems) ? values.skippedItems.slice(0, 40) : [];
+  const filteredItems = uniqueRecommendBatchItems(values.filteredItems, 100);
+  const observedItems = uniqueRecommendBatchItems(values.observedItems, 100);
+  return {
+    ok: true,
+    outcome: values.outcome || "uncertain",
+    clicked: Boolean(values.clicked),
+    reason: values.reason || "",
+    blockedReason: values.blockedReason || "",
+    href: location.href,
+    path: location.pathname,
+    title: document.title,
+    item: values.item || emptyRecommendBatchItem(),
+    skippedItems,
+    filteredItems,
+    observedItems,
+    filteredCount: filteredItems.length,
+    skippedCount: skippedItems.length,
+    scannedFingerprints: Array.from(new Set(values.scannedFingerprints || [])).filter(Boolean).slice(-200),
+    scrollAttempts: Number(values.scrollAttempts || 0),
+    greetingButtonText: values.greetingButtonText || "",
+    greetingButtonSelector: values.greetingButtonSelector || "",
+    directGreetingDetected: Boolean(values.directGreetingDetected),
+    afterGreetingButtonText: values.afterGreetingButtonText || "",
+    afterGreetingButtonSelector: values.afterGreetingButtonSelector || "",
+    afterCardText: values.afterCardText || "",
+    beforeCardText: values.beforeCardText || "",
+    bodyTextLength: normalizeText(document.body?.textContent || "").length
+  };
+}
+
+function uniqueRecommendBatchItems(items, limit) {
+  if (!Array.isArray(items)) return [];
+  const seen = new Set();
+  const result = [];
+  for (const item of items) {
+    const key = recommendBatchItemKey(item);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    result.push(item);
+    if (result.length >= limit) break;
+  }
+  return result;
+}
+
+function upsertObservedRecommendBatchItem(items, item) {
+  const key = recommendBatchItemKey(item);
+  if (!key) return;
+  const index = items.findIndex((current) => recommendBatchItemKey(current) === key);
+  if (index >= 0) items[index] = item;
+  else items.push(item);
+}
+
+function recommendBatchItemKey(item) {
+  return item?.fingerprint || item?.externalKey || item?.profileUrl || item?.id || "";
+}
+
+function emptyRecommendBatchItem() {
+  return {
+    id: "",
+    index: -1,
+    externalKey: "",
+    displayName: "候选人",
+    profileUrl: "",
+    rawText: "",
+    salary: "",
+    activeText: "",
+    age: "",
+    experience: "",
+    education: "",
+    arrival: "",
+    filterReason: "",
+    greetingButtonText: "",
+    greetingButtonSelector: "",
+    cardSelector: "",
+    sourceUrl: location.href,
+    fingerprint: ""
+  };
+}
+
+function currentRecommendBatchCards() {
+  const containers = findCandidateListContainers();
+  const scopes = containers.length > 0 ? containers : findRecommendQueueFallbackContainers();
+  return findRecommendQueueCards(scopes);
+}
+
+function recommendBatchItemFromCard(card, index) {
+  const rawText = normalizeText(card?.textContent || "");
+  const profileUrl = findProfileUrl(card) || "";
+  const externalKey = findExternalKey(card, profileUrl, rawText);
+  const fields = extractRecommendQueueFields(rawText);
+  const greeting = findExactRecommendActionControl(card, "打招呼")
+    || findExactRecommendActionControl(card, "继续沟通");
+  return {
+    id: externalKey || profileUrl || rawText.slice(0, 120),
+    index,
+    externalKey: externalKey || "",
+    displayName: findDisplayName(card, rawText),
+    profileUrl,
+    rawText,
+    salary: fields.salary,
+    activeText: fields.activeText,
+    age: fields.age,
+    experience: fields.experience,
+    education: fields.education,
+    arrival: fields.arrival,
+    filterReason: "",
+    greetingButtonText: greeting?.text || "",
+    greetingButtonSelector: greeting?.selector || "",
+    cardSelector: diagnosticSelector(card),
+    sourceUrl: location.href,
+    fingerprint: recommendCardFingerprint(card, rawText, profileUrl, fields)
+  };
+}
+
+function evaluateLocalCandidateFilters(item, job, localFilterFields) {
+  const enabledFields = new Set(Array.isArray(localFilterFields) ? localFilterFields : []);
+  const cardText = normalizeText(item?.rawText || "");
+
+  if (enabledFields.has("keywords")) {
+    const keywords = splitMeaningfulWords(job?.keywords || job?.name || "");
+    if (keywords.length > 0 && !keywords.some((keyword) => looseTextIncludes(cardText, keyword))) {
+      return { matched: false, reason: `关键词不匹配：${keywords.join("、")}` };
+    }
+  }
+
+  if (enabledFields.has("salary")) {
+    const candidateSalary = parseCandidateSalaryRange(item?.salary || cardText);
+    const expectedSalary = normalizeExpectedSalaryRange(job?.salary_min, job?.salary_max);
+    if (!candidateSalary) {
+      return { matched: false, reason: "未读取到可比较的期望薪资" };
+    }
+    if (!salaryRangesOverlap(candidateSalary, expectedSalary)) {
+      return {
+        matched: false,
+        reason: `期望薪资 ${item?.salary || "未知"} 不在 ${describeExpectedSalaryRange(expectedSalary)} 范围内`
+      };
+    }
+  }
+
+  if (enabledFields.has("active_within")) {
+    const expectedDays = parseActiveWithinDays(job?.active_within);
+    const candidateDays = parseActiveWithinDays(item?.activeText || cardText);
+    if (expectedDays !== null && candidateDays === null) {
+      return { matched: false, reason: "未读取到可比较的活跃时间" };
+    }
+    if (expectedDays !== null && candidateDays > expectedDays) {
+      return {
+        matched: false,
+        reason: `活跃时间 ${item?.activeText || "未知"} 不符合 ${normalizeText(job?.active_within || "")} 条件`
+      };
+    }
+  }
+
+  if (enabledFields.has("age")) {
+    const ageRange = normalizeAgeFilterRange(job?.age_min, job?.age_max);
+    const candidateAge = parseCandidateAge(item?.age || cardText);
+    if (candidateAge === null) {
+      return { matched: false, reason: "未读取到可比较的候选人年龄" };
+    }
+    if ((ageRange.min !== null && candidateAge < ageRange.min) || (ageRange.max !== null && candidateAge > ageRange.max)) {
+      return {
+        matched: false,
+        reason: `候选人年龄 ${candidateAge}岁 不符合 ${describeAgeRange(ageRange.min, ageRange.max)} 条件`
+      };
+    }
+  }
+
+  return { matched: true, reason: "" };
+}
+
+function parseCandidateAge(value) {
+  const match = normalizeText(value || "").match(/(\d{2})\s*岁/);
+  if (!match) return null;
+  const age = Number(match[1]);
+  return age >= 16 && age <= 70 ? age : null;
+}
+
+function parseActiveWithinDays(value) {
+  const text = normalizeText(value || "").replace(/\s+/g, "");
+  if (!text) return null;
+  if (/刚刚|分钟|小时|今日|今天/.test(text)) return 1;
+  if (/昨日|昨天/.test(text)) return 1;
+  if (/本周|一周/.test(text)) return 7;
+  if (/本月|一个月/.test(text)) return 30;
+  const match = text.match(/(\d+)\s*(?:天|日)/);
+  return match ? Number(match[1]) : null;
+}
+
+function parseCandidateSalaryRange(value) {
+  const text = normalizeText(value || "").replace(/[~～至]/g, "-");
+  if (!text || text.includes("面议")) return null;
+
+  const range = text.match(/(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)\s*[Kk]/);
+  if (range) {
+    return {
+      min: Number(range[1]) * 1000,
+      max: Number(range[2]) * 1000
+    };
+  }
+
+  const bounded = text.match(/(\d+(?:\.\d+)?)\s*[Kk]\s*(以上|以下)/);
+  if (bounded) {
+    const amount = Number(bounded[1]) * 1000;
+    return bounded[2] === "以上"
+      ? { min: amount, max: Number.POSITIVE_INFINITY }
+      : { min: 0, max: amount };
+  }
+
+  const exact = text.match(/(\d+(?:\.\d+)?)\s*[Kk]/);
+  if (!exact) return null;
+  const amount = Number(exact[1]) * 1000;
+  return { min: amount, max: amount };
+}
+
+function normalizeExpectedSalaryRange(minValue, maxValue) {
+  return {
+    min: normalizeExpectedSalaryValue(minValue, 0),
+    max: normalizeExpectedSalaryValue(maxValue, Number.POSITIVE_INFINITY)
+  };
+}
+
+function normalizeExpectedSalaryValue(value, fallback) {
+  if (value === null || value === undefined || value === "") return fallback;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) return fallback;
+  return number > 0 && number < 1000 ? number * 1000 : number;
+}
+
+function salaryRangesOverlap(candidate, expected) {
+  return candidate.max >= expected.min && candidate.min <= expected.max;
+}
+
+function describeExpectedSalaryRange(range) {
+  if (range.min > 0 && Number.isFinite(range.max)) return `${formatSalaryAmount(range.min)}-${formatSalaryAmount(range.max)}`;
+  if (range.min > 0) return `${formatSalaryAmount(range.min)}以上`;
+  if (Number.isFinite(range.max)) return `${formatSalaryAmount(range.max)}以下`;
+  return "不限薪资";
+}
+
+function formatSalaryAmount(value) {
+  return `${Number(value / 1000).toFixed(value % 1000 === 0 ? 0 : 1)}K`;
+}
+
+function recommendCardFingerprint(card, rawText, profileUrl, fields = extractRecommendQueueFields(rawText)) {
+  const identityNode = [card, ...Array.from(card?.querySelectorAll?.("[data-geek-id], [data-candidate-id], [data-uid], [data-user-id], [data-userid]") || [])]
+    .find((element) => Array.from(element?.attributes || []).some((attr) => /^(data-geek-id|data-candidate-id|data-uid|data-user-id|data-userid)$/i.test(attr.name) && attr.value));
+  const identityAttribute = identityNode
+    ? Array.from(identityNode.attributes).find((attr) => /^(data-geek-id|data-candidate-id|data-uid|data-user-id|data-userid)$/i.test(attr.name) && attr.value)
+    : null;
+  if (identityAttribute?.value) return identityAttribute.name + ":" + identityAttribute.value;
+  if (profileUrl) return "profile:" + profileUrl;
+
+  const stableText = normalizeText(rawText)
+    .replaceAll(String.fromCharCode(0x6253, 0x62db, 0x547c), "")
+    .replaceAll(String.fromCharCode(0x7ee7, 0x7eed, 0x6c9f, 0x901a), "")
+    .slice(0, 260);
+  return [
+    findDisplayName(card, rawText),
+    fields.salary,
+    fields.age,
+    fields.experience,
+    fields.education,
+    fields.arrival,
+    stableText
+  ].join("|");
+}
+
+function findRecommendCardByFingerprint(fingerprint) {
+  if (!fingerprint) return null;
+  return currentRecommendBatchCards().find((card) => {
+    const rawText = normalizeText(card.textContent || "");
+    return recommendCardFingerprint(card, rawText, findProfileUrl(card) || "") === fingerprint;
+  }) || null;
+}
+
+function findExactRecommendActionControl(card, expectedText) {
+  if (!card) return null;
+  const expected = compactRecommendActionText(expectedText);
+  const controls = Array.from(card.querySelectorAll("button, a, [role=\"button\"], span, div"))
+    .filter(isControlVisible)
+    .map((element) => ({
+      element,
+      text: textFromClickable(element),
+      score: recommendActionControlScore(element),
+      depth: recommendActionControlDepth(element, card)
+    }))
+    .filter((item) => compactRecommendActionText(item.text) === expected)
+    .sort((a, b) => elementArea(a.element) - elementArea(b.element) || b.depth - a.depth || b.score - a.score);
+
+  const target = controls[0];
+  if (!target) return null;
+  return {
+    element: target.element,
+    text: normalizeText(target.text),
+    selector: diagnosticSelector(target.element)
+  };
+}
+
+function compactRecommendActionText(value) {
+  return normalizeText(String(value || "")).split(" ").join("");
+}
+
+function recommendActionControlScore(element) {
+  const className = String(element.className || "");
+  let score = 0;
+  if (/button-chat-wrap|button-chat/.test(className)) score += 100;
+  if (/^(BUTTON|A)$/.test(element.tagName)) score += 80;
+  if (element.getAttribute("role") === "button") score += 70;
+  if (/btn|button|operate|action/i.test(className)) score += 40;
+  if (window.getComputedStyle(element).cursor === "pointer") score += 20;
+  return score;
+}
+function recommendActionControlDepth(element, card) {
+  let depth = 0;
+  let current = element;
+  while (current && current !== card) {
+    depth += 1;
+    current = current.parentElement;
+  }
+  return depth;
+}
+
+async function waitForRecommendCardGreetingState(card, fingerprint, timeoutMs) {
+  const startedAt = Date.now();
+  let latestCard = card;
+  let latestAction = null;
+  let latestText = truncateDiagnosticText(card?.textContent || "", 260);
+
+  while (Date.now() - startedAt <= timeoutMs) {
+    const blockedReason = detectGreetingBlockedReason();
+    if (blockedReason) {
+      return {
+        confirmed: false,
+        blockedReason,
+        actionText: latestAction?.text || "",
+        selector: latestAction?.selector || "",
+        cardText: latestText
+      };
+    }
+
+    if (!latestCard?.isConnected) latestCard = findRecommendCardByFingerprint(fingerprint);
+    if (latestCard) {
+      latestAction = findExactRecommendActionControl(latestCard, "继续沟通");
+      latestText = truncateDiagnosticText(latestCard.textContent || "", 260);
+      if (latestAction) {
+        return {
+          confirmed: true,
+          blockedReason: "",
+          actionText: latestAction.text,
+          selector: latestAction.selector,
+          cardText: latestText
+        };
+      }
+    }
+
+    await waitForUiSettle(350);
+  }
+
+  const currentAction = latestCard
+    ? findExactRecommendActionControl(latestCard, "打招呼") || findGreetingStateControl(latestCard)
+    : null;
+  return {
+    confirmed: false,
+    blockedReason: "",
+    actionText: currentAction?.text || "",
+    selector: currentAction?.selector || "",
+    cardText: latestText
+  };
+}
+
+async function resetRecommendListPosition() {
+  const target = findRecommendScrollTarget();
+  if (target === document.scrollingElement || target === document.documentElement || target === document.body) {
+    window.scrollTo({ top: 0, behavior: "auto" });
+  } else if (target) {
+    target.scrollTop = 0;
+    target.dispatchEvent(new Event("scroll", { bubbles: true }));
+  }
+  await waitForUiSettle(700);
+}
+
+function scrollRecommendListForward() {
+  const target = findRecommendScrollTarget();
+  if (!target) return { moved: false, before: 0, after: 0 };
+
+  if (target === document.scrollingElement || target === document.documentElement || target === document.body) {
+    const before = window.scrollY;
+    const distance = Math.max(420, Math.floor(window.innerHeight * 0.8));
+    window.scrollTo({ top: before + distance, behavior: "auto" });
+    return { moved: Math.abs(window.scrollY - before) > 2, before, after: window.scrollY };
+  }
+
+  const before = target.scrollTop;
+  const distance = Math.max(420, Math.floor(target.clientHeight * 0.8));
+  target.scrollTop = Math.min(target.scrollHeight, before + distance);
+  target.dispatchEvent(new Event("scroll", { bubbles: true }));
+  return { moved: Math.abs(target.scrollTop - before) > 2, before, after: target.scrollTop };
+}
+
+function findRecommendScrollTarget() {
+  const cards = currentRecommendBatchCards();
+  const candidates = [];
+  for (const card of cards.slice(0, 4)) {
+    let parent = card.parentElement;
+    for (let depth = 0; parent && depth < 7; depth += 1, parent = parent.parentElement) {
+      if (!candidates.includes(parent)) candidates.push(parent);
+    }
+  }
+  for (const element of document.querySelectorAll(".recommend-list-wrap, .recommend-list, .card-list, [class*=\"recommend-list\"]")) {
+    if (!candidates.includes(element)) candidates.push(element);
+  }
+
+  const scrollable = candidates
+    .filter((element) => element.clientHeight >= 120 && element.scrollHeight > element.clientHeight + 60)
+    .sort((a, b) => {
+      const aOverflow = /auto|scroll/.test(window.getComputedStyle(a).overflowY) ? 1 : 0;
+      const bOverflow = /auto|scroll/.test(window.getComputedStyle(b).overflowY) ? 1 : 0;
+      return bOverflow - aOverflow || a.clientHeight - b.clientHeight;
+    })[0];
+  if (scrollable) return scrollable;
+
+  const documentScroller = document.scrollingElement || document.documentElement;
+  if (documentScroller && documentScroller.scrollHeight > window.innerHeight + 60) return documentScroller;
+  return null;
+}
+
+function recommendBatchCardSignature() {
+  return currentRecommendBatchCards()
+    .map((card) => {
+      const rawText = normalizeText(card.textContent || "");
+      return recommendCardFingerprint(card, rawText, findProfileUrl(card) || "");
+    })
+    .join("||")
+    .slice(0, 4000);
+}
 async function clickSingleGreetingFromRecommendQueue(candidate) {
   if (!location.href.includes("zhipin.com")) {
     return { ok: false, reason: "not_boss_page", href: location.href, path: location.pathname };
@@ -1361,9 +2556,33 @@ async function clickSingleGreetingFromRecommendQueue(candidate) {
     return { ok: false, clicked: false, blockedReason, reason: blockedReason, href: location.href, path: location.pathname };
   }
 
-  const match = findRecommendQueueCardByCandidate(candidate);
+  const match = findRecommendQueueCardByCandidate(candidate, { preferGreeting: true });
   if (!match.card) {
     return { ok: false, clicked: false, reason: "candidate_card_not_found", href: location.href, path: location.pathname, candidateIndex: Number(candidate?.index ?? -1) };
+  }
+
+  const existingState = inspectRecommendGreetingStateFromMatch(match);
+  if (existingState.directGreetingDetected && !findGreetingControl(match.card)) {
+    return {
+      ok: true,
+      clicked: false,
+      reason: "already_greeted",
+      href: location.href,
+      path: location.pathname,
+      title: document.title,
+      candidateIndex: match.index,
+      externalKey: match.externalKey,
+      displayName: findDisplayName(match.card, match.rawText),
+      cardSelector: diagnosticSelector(match.card),
+      greetingButtonText: "",
+      greetingButtonSelector: "",
+      directGreetingDetected: true,
+      afterGreetingButtonText: existingState.greetingButtonText || "",
+      afterGreetingButtonSelector: existingState.greetingButtonSelector || "",
+      afterCardText: existingState.cardText || "",
+      beforeFingerprint: getCandidateListFingerprint(),
+      afterFingerprint: getCandidateListFingerprint()
+    };
   }
 
   const greeting = findGreetingControl(match.card);
@@ -1375,14 +2594,16 @@ async function clickSingleGreetingFromRecommendQueue(candidate) {
       href: location.href,
       path: location.pathname,
       cardSelector: diagnosticSelector(match.card),
-      candidateIndex: match.index
+      candidateIndex: match.index,
+      matchedDisplayName: findDisplayName(match.card, match.rawText),
+      matchedCardText: truncateDiagnosticText(match.rawText, 220),
+      currentGreetingState: existingState.greetingButtonText || ""
     };
   }
 
   const beforeFingerprint = getCandidateListFingerprint();
   clickElement(greeting.element);
-  await waitForUiSettle(1200);
-  const afterState = inspectRecommendGreetingState(candidate);
+  const afterState = await waitForDirectGreetingOnCard(match.card, match, 5200);
   return {
     ok: true,
     clicked: true,
@@ -1414,8 +2635,30 @@ function inspectRecommendGreetingState(candidate) {
     return { ok: false, reason: "candidate_card_not_found", href: location.href, path: location.pathname, candidateIndex: Number(candidate?.index ?? -1) };
   }
 
+  return inspectRecommendGreetingStateFromMatch(match);
+}
+
+async function waitForDirectGreetingOnCard(card, match, timeoutMs) {
+  const startedAt = Date.now();
+  let latest = inspectRecommendGreetingStateFromMatch({ ...match, card });
+  while (Date.now() - startedAt <= timeoutMs) {
+    if (latest.directGreetingDetected) return latest;
+    await waitForUiSettle(450);
+    if (!card.isConnected) {
+      const rematch = findRecommendQueueCardByCandidate({ externalKey: match.externalKey, displayName: findDisplayName(card, match.rawText), index: match.index });
+      if (rematch.card) {
+        card = rematch.card;
+        match = rematch;
+      }
+    }
+    latest = inspectRecommendGreetingStateFromMatch({ ...match, card });
+  }
+  return latest;
+}
+
+function inspectRecommendGreetingStateFromMatch(match) {
   const stateControl = findGreetingStateControl(match.card);
-  const cardText = normalizeText(match.card.textContent || "");
+  const cardText = normalizeText(match.card?.textContent || match.rawText || "");
   const buttonText = stateControl?.text || "";
   const directGreetingDetected = /\u7ee7\u7eed\s*\u6c9f\u901a/.test(buttonText) || /\u7ee7\u7eed\s*\u6c9f\u901a/.test(cardText);
 
@@ -1426,7 +2669,7 @@ function inspectRecommendGreetingState(candidate) {
     title: document.title,
     candidateIndex: match.index,
     externalKey: match.externalKey,
-    displayName: findDisplayName(match.card, match.rawText),
+    displayName: findDisplayName(match.card, cardText || match.rawText || ""),
     cardSelector: diagnosticSelector(match.card),
     directGreetingDetected,
     greetingButtonText: buttonText,
@@ -1536,45 +2779,69 @@ function greetingComposerReason({ blockedReason, input, filled, message }) {
   return "";
 }
 
-function findRecommendQueueCardByCandidate(candidate) {
+function findRecommendQueueCardByCandidate(candidate, options = {}) {
   const containers = findCandidateListContainers();
   const scopes = containers.length > 0 ? containers : findRecommendQueueFallbackContainers();
   const cards = findRecommendQueueCards(scopes);
   const desiredIndex = Number(candidate?.index);
+  const matches = [];
 
   for (let index = 0; index < cards.length; index += 1) {
     const card = cards[index];
     const rawText = normalizeText(card.textContent || "");
     const profileUrl = findProfileUrl(card) || "";
     const externalKey = findExternalKey(card, profileUrl, rawText);
-    if (recommendQueueCandidateMatches(candidate, { rawText, profileUrl, externalKey, index })) {
-      return { card, index, rawText, profileUrl, externalKey };
-    }
+    const score = scoreRecommendQueueCandidateMatch(candidate, { rawText, profileUrl, externalKey, index });
+    if (score <= 0) continue;
+    const greeting = findGreetingControl(card);
+    const directGreetingDetected = /\u7ee7\u7eed\s*\u6c9f\u901a/.test(rawText);
+    const actionScore = options.preferGreeting && greeting ? 20 : 0;
+    matches.push({ card, index, rawText, profileUrl, externalKey, score: score + actionScore, greeting, directGreetingDetected });
   }
+
+  matches.sort((a, b) => b.score - a.score || Number(Boolean(b.greeting)) - Number(Boolean(a.greeting)) || a.index - b.index);
+  const best = matches[0];
+  if (best) return best;
 
   if (Number.isInteger(desiredIndex) && desiredIndex >= 0 && desiredIndex < cards.length) {
     const card = cards[desiredIndex];
     const rawText = normalizeText(card.textContent || "");
-    const profileUrl = findProfileUrl(card) || "";
-    const externalKey = findExternalKey(card, profileUrl, rawText);
-    return { card, index: desiredIndex, rawText, profileUrl, externalKey };
+    const candidateName = normalizeText(candidate?.displayName || "");
+    const greeting = findGreetingControl(card);
+    const directGreetingDetected = /\u7ee7\u7eed\s*\u6c9f\u901a/.test(rawText);
+    if ((!candidateName || rawText.includes(candidateName)) && (!options.preferGreeting || greeting || directGreetingDetected)) {
+      const profileUrl = findProfileUrl(card) || "";
+      const externalKey = findExternalKey(card, profileUrl, rawText);
+      return { card, index: desiredIndex, rawText, profileUrl, externalKey, greeting, directGreetingDetected };
+    }
   }
 
   return { card: null, index: -1, rawText: "", profileUrl: "", externalKey: "" };
 }
 
-function recommendQueueCandidateMatches(candidate, cardInfo) {
-  if (!candidate) return false;
+function scoreRecommendQueueCandidateMatch(candidate, cardInfo) {
+  if (!candidate) return 0;
   const candidateKey = normalizeText(candidate.externalKey || candidate.id || "");
   const candidateUrl = normalizeText(candidate.profileUrl || "");
   const candidateName = normalizeText(candidate.displayName || "");
   const cardKey = normalizeText(cardInfo.externalKey || "");
   const cardUrl = normalizeText(cardInfo.profileUrl || "");
+  const desiredIndex = Number(candidate.index);
 
-  if (candidateKey && cardKey && (candidateKey === cardKey || candidateKey.includes(cardKey) || cardKey.includes(candidateKey))) return true;
-  if (candidateUrl && cardUrl && candidateUrl === cardUrl) return true;
-  if (candidateName && cardInfo.rawText.includes(candidateName) && Number(candidate.index) === cardInfo.index) return true;
-  return false;
+  if (candidateKey && cardKey && candidateKey === cardKey) return 100;
+  if (candidateUrl && cardUrl && candidateUrl === cardUrl) return 95;
+  if (candidateName && cardInfo.rawText.includes(candidateName) && Number.isInteger(desiredIndex) && desiredIndex === cardInfo.index) return 85;
+  if (candidateName && cardInfo.rawText.includes(candidateName) && recommendQueueCandidateFieldOverlap(candidate, cardInfo.rawText)) return 75;
+  if (Number.isInteger(desiredIndex) && desiredIndex === cardInfo.index && (!candidateName || cardInfo.rawText.includes(candidateName))) return 55;
+  if (candidateName && cardInfo.rawText.includes(candidateName)) return 35;
+  return 0;
+}
+
+function recommendQueueCandidateFieldOverlap(candidate, rawText) {
+  return [candidate.salary, candidate.age, candidate.education, candidate.experience, candidate.arrival]
+    .map((value) => normalizeText(String(value || "")))
+    .filter((value) => value.length >= 2)
+    .some((value) => rawText.includes(value));
 }
 
 function findGreetingInputControl() {
@@ -1658,6 +2925,7 @@ function waitForUiSettle(ms) {
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+globalThis.__recruitmentAssistantProcessRecommendBatchCard = processNextRecommendBatchCard;
 globalThis.__recruitmentAssistantCollectCandidates = collectCandidatesFromPage;
 globalThis.__recruitmentAssistantApplyFilters = applyRecruitmentFilters;
 globalThis.__recruitmentAssistantGetDiagnostics = getCandidateDiagnostics;

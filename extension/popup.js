@@ -1,4 +1,10 @@
 const localBaseUrl = "http://localhost:3000";
+const batchPreferencesStorageKey = "recruitmentAssistantBatchPreferences";
+const defaultBatchPreferences = Object.freeze({
+  targetCount: 3,
+  intervalMinSeconds: 45,
+  intervalMaxSeconds: 90
+});
 const statusEl = document.getElementById("status");
 const resultEl = document.getElementById("result");
 const collectButton = document.getElementById("collect");
@@ -13,44 +19,71 @@ const batchContinueButton = document.getElementById("batch-continue");
 const batchPauseButton = document.getElementById("batch-pause");
 const diagnoseFiltersButton = document.getElementById("diagnose-filters");
 const openAppButton = document.getElementById("open-app");
+const openDebugButton = document.getElementById("open-debug");
 
-collectButton.addEventListener("click", () => {
+let lastGreetingBatchSnapshot = null;
+let greetingBatchRefreshTimer = null;
+
+for (const input of [batchTargetInput, batchIntervalMinInput, batchIntervalMaxInput]) {
+  input?.addEventListener("input", () => {
+    if (hasCompleteBatchPreferenceInputs()) saveBatchPreferencesQuietly(false);
+  });
+  input?.addEventListener("change", () => saveBatchPreferencesQuietly(true));
+}
+
+collectButton?.addEventListener("click", () => {
   void collectCandidates({ applyFilter: false });
 });
 
-filterCollectButton.addEventListener("click", () => {
+filterCollectButton?.addEventListener("click", () => {
   void collectCandidates({ applyFilter: true });
 });
 
-recommendQueueButton.addEventListener("click", () => {
+recommendQueueButton?.addEventListener("click", () => {
   void collectRecommendQueue();
 });
 
-singleGreetingTestButton.addEventListener("click", () => {
+singleGreetingTestButton?.addEventListener("click", () => {
   void runSingleGreetingTest();
 });
 
-batchStartButton.addEventListener("click", () => {
+batchStartButton?.addEventListener("click", () => {
   void runGreetingBatchStep({ startNew: true });
 });
 
-batchContinueButton.addEventListener("click", () => {
+batchContinueButton?.addEventListener("click", () => {
   void runGreetingBatchStep({ startNew: false });
 });
 
-batchPauseButton.addEventListener("click", () => {
+batchPauseButton?.addEventListener("click", () => {
   void pauseGreetingBatch();
 });
 
-diagnoseFiltersButton.addEventListener("click", () => {
+diagnoseFiltersButton?.addEventListener("click", () => {
   void diagnoseFilterControls();
 });
 
-openAppButton.addEventListener("click", () => {
+openAppButton?.addEventListener("click", () => {
   void chrome.tabs.create({ url: localBaseUrl });
 });
 
-void refreshGreetingBatchSnapshot();
+openDebugButton?.addEventListener("click", () => {
+  void chrome.tabs.create({ url: chrome.runtime.getURL("debug.html") });
+});
+
+if (batchStartButton) {
+  void initializeGreetingBatchPopup();
+}
+
+window.addEventListener("unload", () => {
+  if (greetingBatchRefreshTimer) clearInterval(greetingBatchRefreshTimer);
+});
+
+async function initializeGreetingBatchPopup() {
+  await restoreBatchPreferences();
+  await refreshGreetingBatchSnapshot();
+  greetingBatchRefreshTimer = setInterval(() => void refreshGreetingBatchSnapshot(), 2000);
+}
 
 async function refreshGreetingBatchSnapshot() {
   try {
@@ -59,6 +92,8 @@ async function refreshGreetingBatchSnapshot() {
     if (!response.ok) return;
     const batch = await response.json();
     if (!batch) return;
+    lastGreetingBatchSnapshot = batch;
+    updateBatchActionButtons(batch);
     statusEl.textContent = greetingBatchSnapshotText(batch);
     renderGreetingBatchResult(batch);
   } catch (_error) {
@@ -289,6 +324,8 @@ async function clickGreetingInTab(tabId, item) {
   }
   const clicked = results.find((result) => result.ok && result.clicked);
   if (clicked) return clicked;
+  const alreadyGreeted = results.find((result) => result.ok && result.directGreetingDetected);
+  if (alreadyGreeted) return alreadyGreeted;
   throw new Error(buildGreetingFrameError(results, "\u6ca1\u6709\u5728\u5f53\u524d BOSS \u9875\u9762\u70b9\u51fb\u5230\u6253\u62db\u547c\u6309\u94ae\u3002"));
 }
 
@@ -404,143 +441,61 @@ function sleep(ms) {
 }
 
 async function runGreetingBatchStep({ startNew }) {
-  setBusy(true, startNew ? "\u6b63\u5728\u542f\u52a8\u6279\u91cf\u76f4\u63a5\u6253\u62db\u547c..." : "\u6b63\u5728\u68c0\u67e5\u6279\u91cf\u72b6\u6001...");
+  setBusy(true, startNew ? "正在应用已保存筛选并刷新 BOSS 列表..." : "正在恢复批量打招呼...");
   if (startNew) {
     resultEl.hidden = true;
     resultEl.replaceChildren();
   }
 
   try {
+    const preferences = startNew
+      ? await saveBatchPreferences({ applyToInputs: true })
+      : null;
     await assertLocalToolReady();
-    const nextPayload = startNew ? await startGreetingBatch() : await getNextGreetingBatchItemFromServer();
-    if (nextPayload.waitSeconds > 0) {
-      statusEl.textContent = greetingBatchWaitText(nextPayload.batch, nextPayload.waitSeconds);
-      renderGreetingBatchResult(nextPayload.batch);
-      return;
-    }
-
-    if (!nextPayload.nextItem) {
-      statusEl.textContent = batchDoneText(nextPayload.batch);
-      renderGreetingBatchResult(nextPayload.batch);
-      return;
-    }
-
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id || !tab.url?.includes("zhipin.com")) {
-      throw new Error("\u8bf7\u5148\u5207\u6362\u5230 BOSS \u63a8\u8350\u9875\uff0c\u5e76\u786e\u4fdd\u5df2\u767b\u5f55\u3002");
+    if (!tab?.id || !tab.url?.includes("zhipin.com/web/chat/recommend")) {
+      throw new Error("请先切换到已登录的 BOSS 推荐牛人页面。");
     }
 
-    const item = nextPayload.nextItem;
-    statusEl.textContent = `\u6b63\u5728\u70b9\u51fb\u7b2c ${item.index + 1} \u4e2a\u5019\u9009\u4eba\u7684\u6253\u62db\u547c\uff1a${item.displayName || "\u5019\u9009\u4eba"}`;
+    const response = await chrome.runtime.sendMessage(startNew
+      ? {
+          type: "GREETING_BATCH_START",
+          tabId: tab.id,
+          targetCount: preferences.targetCount,
+          intervalMinSeconds: preferences.intervalMinSeconds,
+          intervalMaxSeconds: preferences.intervalMaxSeconds
+        }
+      : { type: "GREETING_BATCH_RESUME" });
 
-    const clickResult = await clickGreetingInTab(tab.id, item);
-    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    const inspectTabId = activeTab?.id && activeTab.url?.includes("zhipin.com") ? activeTab.id : tab.id;
-    const composerResult = isDirectGreetingClickResult(clickResult)
-      ? directGreetingComposerResultFromClick(clickResult)
-      : await waitForGreetingComposerAcrossTabs(inspectTabId, "", item, 3500);
-
-    const recordResponse = await fetch(`${localBaseUrl}/api/extension/greeting-batch/record`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        item,
-        messagePreview: "",
-        clickResult,
-        composerResult
-      })
-    });
-    const recordPayload = await recordResponse.json();
-    if (!recordResponse.ok) throw new Error(recordPayload.error || "\u4e0a\u62a5\u6279\u91cf\u8bb0\u5f55\u5931\u8d25\u3002");
-
-    const latestRecord = recordPayload.batch?.records?.at?.(-1);
-    statusEl.textContent = greetingBatchStepStatusText(recordPayload.batch, latestRecord, composerResult);
-    renderGreetingBatchResult(recordPayload.batch);
+    if (!response?.ok) throw new Error(response?.error || "批量操作失败。");
+    const batch = response.batch;
+    lastGreetingBatchSnapshot = batch;
+    updateBatchActionButtons(batch);
+    statusEl.textContent = greetingBatchSnapshotText(batch);
+    renderGreetingBatchResult(batch);
   } catch (error) {
     statusEl.textContent = error instanceof Error ? error.message : String(error);
   } finally {
     setBusy(false);
   }
-}
-
-function isDirectGreetingClickResult(result) {
-  const stateText = [result?.afterGreetingButtonText, result?.afterCardText].join(" ");
-  return Boolean(result?.directGreetingDetected || /\u7ee7\u7eed\s*\u6c9f\u901a/.test(stateText));
-}
-
-function directGreetingComposerResultFromClick(clickResult) {
-  return {
-    ok: true,
-    href: clickResult.href || "",
-    path: clickResult.path || "",
-    title: clickResult.title || "",
-    reason: "",
-    blockedReason: "",
-    inputSelector: "",
-    inputText: "",
-    sendButtonSelector: "",
-    sendButtonText: "",
-    directGreetingDetected: true,
-    afterGreetingButtonText: clickResult.afterGreetingButtonText || "",
-    afterGreetingButtonSelector: clickResult.afterGreetingButtonSelector || "",
-    afterCardText: clickResult.afterCardText || "",
-    filled: false,
-    readyToSend: false,
-    sent: false,
-    sendSuppressed: true,
-    messagePreview: "",
-    bodyTextLength: 0,
-    diagnostics: {
-      inputCandidates: [],
-      sendCandidates: [],
-      textHints: [clickResult.afterCardText, clickResult.afterGreetingButtonText].filter(Boolean)
-    }
-  };
-}
-async function startGreetingBatch() {
-  const response = await fetch(`${localBaseUrl}/api/extension/greeting-batch/start`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      targetCount: numberInputValue(batchTargetInput, 3),
-      intervalMinSeconds: numberInputValue(batchIntervalMinInput, 45),
-      intervalMaxSeconds: numberInputValue(batchIntervalMaxInput, 90)
-    })
-  });
-  const payload = await response.json();
-  if (!response.ok) throw new Error(payload.error || "\u542f\u52a8\u6279\u91cf\u5931\u8d25\u3002");
-  return payload;
-}
-
-async function getNextGreetingBatchItemFromServer() {
-  const response = await fetch(`${localBaseUrl}/api/extension/greeting-batch/next`, { method: "POST" });
-  const payload = await response.json();
-  if (!response.ok) throw new Error(payload.error || "\u8bfb\u53d6\u6279\u91cf\u4e0b\u4e00\u4e2a\u5931\u8d25\u3002");
-  return payload;
 }
 
 async function pauseGreetingBatch() {
-  setBusy(true, "\u6b63\u5728\u6682\u505c\u6279\u91cf...");
-  resultEl.hidden = true;
-  resultEl.replaceChildren();
+  setBusy(true, "正在暂停批量...");
   try {
     await assertLocalToolReady();
-    const response = await fetch(`${localBaseUrl}/api/extension/greeting-batch/pause`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reason: "\u7528\u6237\u624b\u52a8\u6682\u505c" })
-    });
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || "\u6682\u505c\u6279\u91cf\u5931\u8d25\u3002");
+    const response = await chrome.runtime.sendMessage({ type: "GREETING_BATCH_PAUSE" });
+    if (!response?.ok) throw new Error(response?.error || "暂停批量失败。");
+    lastGreetingBatchSnapshot = response.batch;
+    updateBatchActionButtons(response.batch);
     statusEl.textContent = "\u6279\u91cf\u5df2\u6682\u505c\u3002";
-    renderGreetingBatchResult(payload.batch);
+    renderGreetingBatchResult(response.batch);
   } catch (error) {
     statusEl.textContent = error instanceof Error ? error.message : String(error);
   } finally {
     setBusy(false);
   }
 }
-
 async function getDefaultGreetingMessage() {
   const [jobsResponse, templatesResponse] = await Promise.all([
     fetch(`${localBaseUrl}/api/jobs`),
@@ -557,9 +512,75 @@ async function getDefaultGreetingMessage() {
   return message;
 }
 
+async function restoreBatchPreferences() {
+  try {
+    const stored = await chrome.storage.local.get(batchPreferencesStorageKey);
+    const preferences = normalizeBatchPreferences(stored?.[batchPreferencesStorageKey]);
+    applyBatchPreferencesToInputs(preferences);
+    return preferences;
+  } catch (_error) {
+    applyBatchPreferencesToInputs(defaultBatchPreferences);
+    return defaultBatchPreferences;
+  }
+}
+
+async function saveBatchPreferences({ applyToInputs = false } = {}) {
+  const preferences = readBatchPreferencesFromInputs();
+  if (applyToInputs) applyBatchPreferencesToInputs(preferences);
+  await chrome.storage.local.set({ [batchPreferencesStorageKey]: preferences });
+  return preferences;
+}
+
+function saveBatchPreferencesQuietly(applyToInputs) {
+  void saveBatchPreferences({ applyToInputs }).catch(() => {
+    // Starting a batch retries the write and reports any storage error to the user.
+  });
+}
+
+function readBatchPreferencesFromInputs() {
+  return normalizeBatchPreferences({
+    targetCount: numberInputValue(batchTargetInput, defaultBatchPreferences.targetCount),
+    intervalMinSeconds: numberInputValue(batchIntervalMinInput, defaultBatchPreferences.intervalMinSeconds),
+    intervalMaxSeconds: numberInputValue(batchIntervalMaxInput, defaultBatchPreferences.intervalMaxSeconds)
+  });
+}
+
+function normalizeBatchPreferences(value = {}) {
+  const targetCount = clampInteger(value?.targetCount, 1, 20, defaultBatchPreferences.targetCount);
+  const intervalMinSeconds = clampInteger(value?.intervalMinSeconds, 30, 3600, defaultBatchPreferences.intervalMinSeconds);
+  const intervalMaxSeconds = clampInteger(
+    value?.intervalMaxSeconds,
+    intervalMinSeconds,
+    7200,
+    Math.max(intervalMinSeconds, defaultBatchPreferences.intervalMaxSeconds)
+  );
+  return { targetCount, intervalMinSeconds, intervalMaxSeconds };
+}
+
+function applyBatchPreferencesToInputs(preferences) {
+  if (batchTargetInput) batchTargetInput.value = String(preferences.targetCount);
+  if (batchIntervalMinInput) batchIntervalMinInput.value = String(preferences.intervalMinSeconds);
+  if (batchIntervalMaxInput) batchIntervalMaxInput.value = String(preferences.intervalMaxSeconds);
+}
+
+function hasCompleteBatchPreferenceInputs() {
+  return [batchTargetInput, batchIntervalMinInput, batchIntervalMaxInput].every((input) => {
+    const value = String(input?.value ?? "").trim();
+    return value !== "" && Number.isFinite(Number(value));
+  });
+}
+
 function numberInputValue(input, fallback) {
-  const parsed = Number(input?.value);
+  const value = String(input?.value ?? "").trim();
+  if (!value) return fallback;
+  const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function clampInteger(value, min, max, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(number)));
 }
 
 function greetingBatchSnapshotText(batch) {
@@ -578,17 +599,12 @@ function getBatchRemainingSeconds(batch) {
   if (!batch?.nextAllowedAt) return 0;
   return Math.max(0, Math.ceil((new Date(batch.nextAllowedAt).getTime() - Date.now()) / 1000));
 }
-function greetingBatchStepStatusText(batch, record, composerResult) {
-  if (record?.status === "direct_greeted") return record.errorMessage || "\u63a8\u8350\u9875\u6309\u94ae\u5df2\u53d8\u4e3a\u7ee7\u7eed\u6c9f\u901a\uff0c\u89c6\u4e3a\u5df2\u76f4\u63a5\u6253\u62db\u547c\u3002";
-  if (record?.status === "clicked_no_composer") return record.errorMessage || "\u63a8\u8350\u9875\u6253\u62db\u547c\u540e\u672a\u6253\u5f00\u8f93\u5165\u6846\uff0c\u5df2\u6682\u505c\u3002";
-  if (record?.status === "blocked") return `\u6279\u91cf\u5df2\u505c\u6b62\uff1a${record.errorMessage || batch?.pauseReason || "blocked"}`;
-  if (record?.status === "failed") return `\u6279\u91cf\u5904\u7406\u5931\u8d25\uff1a${record.errorMessage || "failed"}`;
-  if (record?.status === "filled" || composerResult?.inputSelector) return "\u5df2\u8bc6\u522b\u5230\u8f93\u5165\u6846\uff0c\u4f46\u5f53\u524d\u63a8\u8350\u9875\u6a21\u5f0f\u53ea\u6267\u884c\u5361\u7247\u6253\u62db\u547c\u6309\u94ae\u3002";
-  if (composerResult?.blockedReason) return `\u6279\u91cf\u5df2\u505c\u6b62\uff1a${composerResult.blockedReason}`;
-  return batch?.pauseReason || "\u6279\u91cf\u5df2\u6682\u505c\u3002";
-}
 function batchDoneText(batch) {
   if (!batch) return "\u6279\u91cf\u72b6\u6001\u672a\u77e5\u3002";
+  if (batch.status === "running") {
+    const filterText = batch.filterFields?.length ? `已应用筛选 ${batch.filterFields.join("、")}，` : "";
+    return filterText + "正在从上到下检查推荐卡片。";
+  }
   if (batch.status === "completed") return "\u6279\u91cf\u5df2\u5b8c\u6210\u3002";
   if (batch.status === "blocked") return `\u6279\u91cf\u5df2\u505c\u6b62\uff1a${batch.pauseReason || "blocked"}`;
   if (batch.status === "paused") return `\u6279\u91cf\u5df2\u6682\u505c\uff1a${batch.pauseReason || "paused"}`;
@@ -846,8 +862,30 @@ function renderGreetingBatchResult(batch) {
   if (!batch) return;
 
   const summary = document.createElement("p");
-  summary.textContent = `\u6279\u91cf ${batchStateLabel(batch.status)} \u00b7 \u76ee\u6807 ${batch.targetCount} \u00b7 \u5df2\u586b\u5165 ${batch.filled} \u00b7 \u76f4\u63a5 ${batch.directGreeted || 0} \u00b7 \u5931\u8d25 ${batch.failed} \u00b7 \u8df3\u8fc7 ${batch.skipped || 0} \u00b7 \u963b\u65ad ${batch.blocked}`;
+  summary.textContent = "批量 " + batchStateLabel(batch.status) +
+    " · 目标 " + batch.targetCount +
+    " · 成功 " + (batch.directGreeted || 0) +
+    " · 已联系 " + (batch.skipped || 0) +
+    " · 过滤 " + (batch.filteredOut || 0) +
+    " · 失败 " + (batch.failed || 0) +
+    " · 阻断 " + (batch.blocked || 0);
   resultEl.append(summary);
+
+  if (batch.filterFields?.length) {
+    const filters = document.createElement("code");
+    filters.textContent = "已应用筛选：" + batch.filterFields.join("、");
+    resultEl.append(filters);
+  }
+
+  if (batch.filterWarnings?.length) {
+    const warnings = document.createElement("code");
+    warnings.textContent = "筛选说明：" + batch.filterWarnings.join("；");
+    resultEl.append(warnings);
+  }
+
+  const interval = document.createElement("p");
+  interval.textContent = batch.intervalMinSeconds + "-" + batch.intervalMaxSeconds + "s 随机间隔";
+  resultEl.append(interval);
 
   if (batch.pauseReason) {
     const reason = document.createElement("code");
@@ -857,52 +895,61 @@ function renderGreetingBatchResult(batch) {
 
   if (batch.nextAllowedAt) {
     const wait = document.createElement("code");
-    wait.textContent = `\u4e0b\u6b21\u6700\u65e9\u65f6\u95f4\uff1a${new Date(batch.nextAllowedAt).toLocaleTimeString()}`;
+    wait.textContent = "下次自动执行：" + new Date(batch.nextAllowedAt).toLocaleTimeString();
     resultEl.append(wait);
   }
 
-  for (const record of (batch.records || []).slice(-4).reverse()) {
+  for (const record of (batch.records || []).slice(-3).reverse()) {
     const row = document.createElement("code");
-    row.textContent = `${batchRecordStatusLabel(record.status)} \u00b7 ${record.item?.displayName || "\u5019\u9009\u4eba"} \u00b7 ${record.errorMessage || record.composerResult?.inputSelector || ""}`;
+    const filteredCount = Number(record.actionResult?.filteredCount || 0);
+    const skippedCount = Math.max(0, Number(record.actionResult?.skippedCount || 0));
+    const skipped = skippedCount ? " · 已联系跳过 " + skippedCount : "";
+    const filtered = filteredCount ? " · 条件过滤 " + filteredCount : "";
+    row.textContent = batchRecordStatusLabel(record.status) +
+      " · " + (record.item?.displayName || "候选人") +
+      skipped +
+      filtered +
+      (record.errorMessage ? " · " + record.errorMessage : "");
     resultEl.append(row);
   }
 
-  appendComposerDiagnostics(batch.records?.at?.(-1));
+  appendDirectGreetingDiagnostics(batch.records?.at?.(-1));
 }
 
 function batchStateLabel(status) {
-  if (status === "running") return "\u8fd0\u884c\u4e2d";
-  if (status === "waiting_confirmation") return "\u7b49\u5f85\u95f4\u9694";
-  if (status === "waiting_interval") return "\u7b49\u5f85\u95f4\u9694";
-  if (status === "paused") return "\u5df2\u6682\u505c";
-  if (status === "completed") return "\u5df2\u5b8c\u6210";
-  if (status === "blocked") return "\u5df2\u963b\u65ad";
-  return status;
-}
-function batchRecordStatusLabel(status) {
-  if (status === "direct_greeted") return "\u76f4\u63a5\u6253\u62db\u547c";
-  if (status === "clicked_no_composer") return "\u63a8\u8350\u9875\u65e0\u7f16\u8f91\u5668";
-  if (status === "filled") return "\u5df2\u586b\u5165";
-  if (status === "failed") return "\u5931\u8d25";
-  if (status === "blocked") return "\u963b\u65ad";
+  if (status === "running") return "运行中";
+  if (status === "waiting_interval") return "等待间隔";
+  if (status === "paused") return "已暂停";
+  if (status === "completed") return "已完成";
+  if (status === "blocked") return "已阻断";
   return status;
 }
 
-function appendComposerDiagnostics(record) {
-  const diagnostics = record?.composerResult?.diagnostics;
-  if (!diagnostics) return;
+function batchRecordStatusLabel(status) {
+  if (status === "direct_greeted") return "已打招呼";
+  if (status === "exhausted") return "列表已遍历";
+  if (status === "uncertain") return "结果待确认";
+  if (status === "failed") return "失败";
+  if (status === "blocked") return "阻断";
+  return status;
+}
+
+function appendDirectGreetingDiagnostics(record) {
+  const action = record?.actionResult || record?.clickResult;
+  if (!action) return;
   const lines = [];
-  if (record.composerResult?.path) lines.push(`frame: ${record.composerResult.path}`);
-  if (diagnostics.textHints?.length) lines.push(`hints: ${diagnostics.textHints.slice(0, 5).join(" / ")}`);
-  if (diagnostics.inputCandidates?.length) lines.push(`input candidates: ${diagnostics.inputCandidates.slice(0, 3).map((item) => item.selector || item.path || item.tag).join(" | ")}`);
-  if (diagnostics.sendCandidates?.length) lines.push(`send candidates: ${diagnostics.sendCandidates.slice(0, 3).map((item) => item.selector || item.path || item.tag).join(" | ")}`);
+  if (action.framePath || action.path) lines.push("frame: " + (action.framePath || action.path));
+  if (action.greetingButtonText || action.afterGreetingButtonText) {
+    lines.push("button: " + (action.greetingButtonText || "-") + " -> " + (action.afterGreetingButtonText || "-"));
+  }
+  if (action.greetingButtonSelector) lines.push("clicked selector: " + action.greetingButtonSelector);
+  if (action.scrollAttempts) lines.push("scroll: " + action.scrollAttempts);
   for (const line of lines) {
     const row = document.createElement("code");
     row.textContent = line;
     resultEl.append(row);
   }
 }
-
 function renderGreetingTestResult(report) {
   resultEl.hidden = false;
   resultEl.replaceChildren();
@@ -991,19 +1038,31 @@ function formatStatus(status) {
   return status || "未知";
 }
 
-function setBusy(isBusy, message) {
-  collectButton.disabled = isBusy;
-  filterCollectButton.disabled = isBusy;
-  recommendQueueButton.disabled = isBusy;
-  singleGreetingTestButton.disabled = isBusy;
-  batchStartButton.disabled = isBusy;
-  batchContinueButton.disabled = isBusy;
-  batchPauseButton.disabled = isBusy;
-  diagnoseFiltersButton.disabled = isBusy;
-  if (message) statusEl.textContent = message;
+function updateBatchActionButtons(batch) {
+  if (!batchStartButton || !batchContinueButton || !batchPauseButton) return;
+
+  const status = batch?.status || "idle";
+  batchStartButton.hidden = !["idle", "completed", "blocked"].includes(status);
+  batchContinueButton.hidden = status !== "paused";
+  batchPauseButton.hidden = !["running", "waiting_interval"].includes(status);
+
+  batchStartButton.textContent = status === "completed" ? "开始新批次" : status === "blocked" ? "已阻断" : "开始批量打招呼";
+  batchStartButton.disabled = status === "blocked";
 }
 
-
-
-
-
+function setBusy(isBusy, message) {
+  for (const button of [
+    collectButton,
+    filterCollectButton,
+    recommendQueueButton,
+    singleGreetingTestButton,
+    batchStartButton,
+    batchContinueButton,
+    batchPauseButton,
+    diagnoseFiltersButton
+  ]) {
+    if (button) button.disabled = isBusy;
+  }
+  if (!isBusy) updateBatchActionButtons(lastGreetingBatchSnapshot);
+  if (message && statusEl) statusEl.textContent = message;
+}
