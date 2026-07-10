@@ -115,6 +115,10 @@ type ExtensionGreetingActionResult = {
   inputText: string;
   sendButtonSelector: string;
   sendButtonText: string;
+  directGreetingDetected: boolean;
+  afterGreetingButtonText: string;
+  afterGreetingButtonSelector: string;
+  afterCardText: string;
   filled: boolean;
   readyToSend: boolean;
   sent: boolean;
@@ -163,6 +167,7 @@ type ExtensionGreetingBatchState = {
   failed: number;
   blocked: number;
   skipped: number;
+  directGreeted: number;
   records: ExtensionGreetingBatchRecord[];
 };
 type ExtensionRecommendQueueReport = {
@@ -310,6 +315,7 @@ export function createExtensionRouter({ db }: { db: AppDatabase }) {
       failed: 0,
       blocked: 0,
       skipped: 0,
+      directGreeted: 0,
       records: []
     };
 
@@ -410,12 +416,13 @@ function deriveGreetingBatchErrorMessage(
   composerResult: ExtensionGreetingActionResult
 ) {
   if (blockedReason) return blockedReason;
-  if (status === "clicked_no_composer") return deriveGreetingBatchError(clickResult, composerResult);
+  if (status === "direct_greeted" || status === "clicked_no_composer") return deriveGreetingBatchError(clickResult, composerResult);
   return composerResult.reason || clickResult.reason || deriveGreetingBatchError(clickResult, composerResult);
 }
 function deriveGreetingBatchStatus(clickResult: ExtensionGreetingActionResult, composerResult: ExtensionGreetingActionResult, blockedReason: string) {
   if (blockedReason) return "blocked";
   if (composerResult.inputSelector && composerResult.filled) return "filled";
+  if (isDirectRecommendGreetingDone(clickResult, composerResult)) return "direct_greeted";
   if (isRecommendFrameWithoutComposer(composerResult) && hasRecommendGreetingEvidence(clickResult, composerResult)) return "clicked_no_composer";
   return "failed";
 }
@@ -424,6 +431,16 @@ function isRecommendFrameWithoutComposer(composerResult: ExtensionGreetingAction
   return !composerResult.inputSelector && (composerResult.path.includes("/web/frame/recommend") || composerResult.path.includes("/web/chat/recommend"));
 }
 
+function isDirectRecommendGreetingDone(clickResult: ExtensionGreetingActionResult, composerResult: ExtensionGreetingActionResult) {
+  if (!isRecommendFrameWithoutComposer(composerResult)) return false;
+  const stateText = [
+    clickResult.afterGreetingButtonText,
+    composerResult.afterGreetingButtonText,
+    clickResult.afterCardText,
+    composerResult.afterCardText
+  ].join(" ");
+  return Boolean(clickResult.directGreetingDetected || composerResult.directGreetingDetected || /\u7ee7\u7eed\s*\u6c9f\u901a/.test(stateText));
+}
 function hasRecommendGreetingEvidence(clickResult: ExtensionGreetingActionResult, composerResult: ExtensionGreetingActionResult) {
   const hints = composerResult.diagnostics.textHints.join(" ");
   return Boolean(
@@ -445,6 +462,7 @@ function normalizeGreetingComposerDiagnostics(input: unknown): ExtensionGreeting
 }
 
 function deriveGreetingBatchError(clickResult: ExtensionGreetingActionResult, composerResult: ExtensionGreetingActionResult) {
+  if (isDirectRecommendGreetingDone(clickResult, composerResult)) return "\u63a8\u8350\u9875\u6309\u94ae\u5df2\u53d8\u4e3a\u7ee7\u7eed\u6c9f\u901a\uff0c\u89c6\u4e3a\u5df2\u76f4\u63a5\u6253\u62db\u547c\uff1b\u672a\u6253\u5f00\u81ea\u5b9a\u4e49\u6d88\u606f\u8f93\u5165\u6846\u3002";
   if (isRecommendFrameWithoutComposer(composerResult) && hasRecommendGreetingEvidence(clickResult, composerResult)) return "\u63a8\u8350\u9875\u6253\u62db\u547c\u540e\u672a\u6253\u5f00\u6d88\u606f\u8f93\u5165\u6846\uff1b\u8be5\u6309\u94ae\u53ef\u80fd\u662f\u76f4\u63a5\u6253\u62db\u547c\u52a8\u4f5c\uff0c\u5df2\u6682\u505c\u907f\u514d\u7ee7\u7eed\u8bef\u70b9\u3002";
   if (!clickResult.clicked) return "\u672a\u70b9\u51fb\u5230\u6253\u62db\u547c\u6309\u94ae\u3002";
   if (!composerResult.inputSelector) return "\u5df2\u70b9\u51fb\u6253\u62db\u547c\uff0c\u4f46\u672a\u8bc6\u522b\u5230\u6d88\u606f\u8f93\u5165\u6846\u3002";
@@ -475,9 +493,23 @@ function applyGreetingBatchRecord(record: ExtensionGreetingBatchRecord) {
     return;
   }
 
+  if (record.status === "direct_greeted") {
+    lastGreetingBatch.directGreeted += 1;
+    if (completedGreetingCount(lastGreetingBatch) >= lastGreetingBatch.targetCount) {
+      lastGreetingBatch.status = "completed";
+      lastGreetingBatch.pauseReason = "";
+      lastGreetingBatch.nextAllowedAt = "";
+      return;
+    }
+
+    lastGreetingBatch.status = "waiting_interval";
+    lastGreetingBatch.pauseReason = "\u5df2\u76f4\u63a5\u6253\u62db\u547c\uff0c\u7b49\u5f85\u95f4\u9694\u540e\u7ee7\u7eed\u3002";
+    lastGreetingBatch.nextAllowedAt = nextBatchAllowedAt(lastGreetingBatch.intervalMinSeconds, lastGreetingBatch.intervalMaxSeconds);
+    return;
+  }
   if (record.status === "filled") {
     lastGreetingBatch.filled += 1;
-    if (lastGreetingBatch.filled >= lastGreetingBatch.targetCount) {
+    if (completedGreetingCount(lastGreetingBatch) >= lastGreetingBatch.targetCount) {
       lastGreetingBatch.status = "completed";
       lastGreetingBatch.pauseReason = "";
       lastGreetingBatch.nextAllowedAt = "";
@@ -496,9 +528,12 @@ function applyGreetingBatchRecord(record: ExtensionGreetingBatchRecord) {
   lastGreetingBatch.nextAllowedAt = "";
 }
 
+function completedGreetingCount(batch: ExtensionGreetingBatchState) {
+  return batch.filled + batch.directGreeted;
+}
 function getNextGreetingBatchItem() {
   if (!lastGreetingBatch || !lastRecommendQueue) return null;
-  if (lastGreetingBatch.filled >= lastGreetingBatch.targetCount) {
+  if (completedGreetingCount(lastGreetingBatch) >= lastGreetingBatch.targetCount) {
     lastGreetingBatch.status = "completed";
     lastGreetingBatch.nextAllowedAt = "";
     return null;
@@ -508,7 +543,7 @@ function getNextGreetingBatchItem() {
   const nextItem = lastRecommendQueue.items.find((item) => item.greetingButtonSelector && !processed.has(item.externalKey));
   if (!nextItem) {
     lastGreetingBatch.status = "completed";
-    lastGreetingBatch.pauseReason = lastGreetingBatch.filled >= lastGreetingBatch.targetCount ? "" : "\u63a8\u8350\u961f\u5217\u6ca1\u6709\u66f4\u591a\u53ef\u6253\u62db\u547c\u5019\u9009\u4eba\u3002";
+    lastGreetingBatch.pauseReason = completedGreetingCount(lastGreetingBatch) >= lastGreetingBatch.targetCount ? "" : "\u63a8\u8350\u961f\u5217\u6ca1\u6709\u66f4\u591a\u53ef\u6253\u62db\u547c\u5019\u9009\u4eba\u3002";
     lastGreetingBatch.nextAllowedAt = "";
     return null;
   }
@@ -599,6 +634,10 @@ function normalizeGreetingActionResult(input: unknown): ExtensionGreetingActionR
     inputText: truncateText(String(record.inputText || ""), 100),
     sendButtonSelector: truncateText(String(record.sendButtonSelector || ""), 240),
     sendButtonText: truncateText(String(record.sendButtonText || ""), 40),
+    directGreetingDetected: Boolean(record.directGreetingDetected),
+    afterGreetingButtonText: truncateText(String(record.afterGreetingButtonText || ""), 40),
+    afterGreetingButtonSelector: truncateText(String(record.afterGreetingButtonSelector || ""), 240),
+    afterCardText: truncateText(String(record.afterCardText || ""), 260),
     filled: Boolean(record.filled),
     readyToSend: Boolean(record.readyToSend),
     sent: Boolean(record.sent),

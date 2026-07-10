@@ -1348,7 +1348,7 @@ function firstRecommendMatch(text, patterns) {
   return "";
 }
 
-function clickSingleGreetingFromRecommendQueue(candidate) {
+async function clickSingleGreetingFromRecommendQueue(candidate) {
   if (!location.href.includes("zhipin.com")) {
     return { ok: false, reason: "not_boss_page", href: location.href, path: location.pathname };
   }
@@ -1379,7 +1379,10 @@ function clickSingleGreetingFromRecommendQueue(candidate) {
     };
   }
 
+  const beforeFingerprint = getCandidateListFingerprint();
   clickElement(greeting.element);
+  await waitForUiSettle(1200);
+  const afterState = inspectRecommendGreetingState(candidate);
   return {
     ok: true,
     clicked: true,
@@ -1392,7 +1395,60 @@ function clickSingleGreetingFromRecommendQueue(candidate) {
     cardSelector: diagnosticSelector(match.card),
     greetingButtonText: greeting.text,
     greetingButtonSelector: greeting.selector,
-    beforeFingerprint: getCandidateListFingerprint()
+    directGreetingDetected: Boolean(afterState.directGreetingDetected),
+    afterGreetingButtonText: afterState.greetingButtonText || "",
+    afterGreetingButtonSelector: afterState.greetingButtonSelector || "",
+    afterCardText: afterState.cardText || "",
+    beforeFingerprint,
+    afterFingerprint: getCandidateListFingerprint()
+  };
+}
+
+function inspectRecommendGreetingState(candidate) {
+  if (!location.href.includes("zhipin.com") || !isRecommendCandidateFrame()) {
+    return { ok: false, reason: "not_recommend_frame", href: location.href, path: location.pathname };
+  }
+
+  const match = findRecommendQueueCardByCandidate(candidate);
+  if (!match.card) {
+    return { ok: false, reason: "candidate_card_not_found", href: location.href, path: location.pathname, candidateIndex: Number(candidate?.index ?? -1) };
+  }
+
+  const stateControl = findGreetingStateControl(match.card);
+  const cardText = normalizeText(match.card.textContent || "");
+  const buttonText = stateControl?.text || "";
+  const directGreetingDetected = /\u7ee7\u7eed\s*\u6c9f\u901a/.test(buttonText) || /\u7ee7\u7eed\s*\u6c9f\u901a/.test(cardText);
+
+  return {
+    ok: true,
+    href: location.href,
+    path: location.pathname,
+    title: document.title,
+    candidateIndex: match.index,
+    externalKey: match.externalKey,
+    displayName: findDisplayName(match.card, match.rawText),
+    cardSelector: diagnosticSelector(match.card),
+    directGreetingDetected,
+    greetingButtonText: buttonText,
+    greetingButtonSelector: stateControl?.selector || "",
+    cardText: truncateDiagnosticText(cardText, 220)
+  };
+}
+
+function findGreetingStateControl(card) {
+  const controls = Array.from(card.querySelectorAll("button, a, span, div, [role=\"button\"]"))
+    .filter(isControlVisible)
+    .map((element) => ({ element, text: textFromClickable(element) }))
+    .filter((item) => item.text && item.text.length <= 24 && /(\u6253\s*\u62db\s*\u547c|\u7ee7\u7eed\s*\u6c9f\u901a)/.test(item.text))
+    .sort((a, b) => elementArea(a.element) - elementArea(b.element));
+
+  const target = controls[0];
+  if (!target) return null;
+  return {
+    element: target.element,
+    text: target.text,
+    selector: diagnosticSelector(target.element),
+    rect: diagnosticRect(target.element)
   };
 }
 
@@ -1410,6 +1466,7 @@ function inspectGreetingComposer(options = {}) {
 
   const reason = greetingComposerReason({ blockedReason, input, filled, message });
   const diagnostics = collectGreetingComposerDiagnostics();
+  const recommendGreetingState = options.candidate ? inspectRecommendGreetingState(options.candidate) : null;
 
   return {
     ok: true,
@@ -1422,6 +1479,10 @@ function inspectGreetingComposer(options = {}) {
     inputText: input ? truncateDiagnosticText(controlTextForDiagnostics(input), 80) : "",
     sendButtonSelector: sendButton ? diagnosticSelector(sendButton) : "",
     sendButtonText: sendButton ? textFromClickable(sendButton) : "",
+    directGreetingDetected: Boolean(recommendGreetingState?.directGreetingDetected),
+    afterGreetingButtonText: recommendGreetingState?.greetingButtonText || "",
+    afterGreetingButtonSelector: recommendGreetingState?.greetingButtonSelector || "",
+    afterCardText: recommendGreetingState?.cardText || "",
     filled,
     readyToSend: Boolean(!blockedReason && input && sendButton && filled),
     sent: false,
@@ -1605,6 +1666,7 @@ globalThis.__recruitmentAssistantCollectFilterDiagnostics = collectFilterControl
 globalThis.__recruitmentAssistantCollectRecommendQueue = collectRecommendQueueFromPage;
 globalThis.__recruitmentAssistantClickSingleGreeting = clickSingleGreetingFromRecommendQueue;
 globalThis.__recruitmentAssistantInspectGreetingComposer = inspectGreetingComposer;
+globalThis.__recruitmentAssistantInspectRecommendGreetingState = inspectRecommendGreetingState;
 
 function normalizeText(value) {
   return value.replace(/\s+/g, " ").trim();

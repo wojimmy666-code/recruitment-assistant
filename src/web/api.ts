@@ -194,6 +194,10 @@ export type GreetingActionResult = {
   inputText: string;
   sendButtonSelector: string;
   sendButtonText: string;
+  directGreetingDetected: boolean;
+  afterGreetingButtonText: string;
+  afterGreetingButtonSelector: string;
+  afterCardText: string;
   filled: boolean;
   readyToSend: boolean;
   sent: boolean;
@@ -242,6 +246,7 @@ export type GreetingBatchState = {
   failed: number;
   blocked: number;
   skipped: number;
+  directGreeted: number;
   records: GreetingBatchRecord[];
 };
 export type SendLog = {

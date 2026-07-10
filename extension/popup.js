@@ -194,7 +194,7 @@ async function runSingleGreetingTest() {
 
     const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const inspectTabId = activeTab?.id && activeTab.url?.includes("zhipin.com") ? activeTab.id : tab.id;
-    const composerResult = await waitForGreetingComposerAcrossTabs(inspectTabId, context.message);
+    const composerResult = await waitForGreetingComposerAcrossTabs(inspectTabId, context.message, context.item);
 
     const response = await fetch(`${localBaseUrl}/api/extension/greeting-test`, {
       method: "POST",
@@ -276,13 +276,13 @@ async function clickGreetingInTab(tabId, item) {
   throw new Error(buildGreetingFrameError(results, "\u6ca1\u6709\u5728\u5f53\u524d BOSS \u9875\u9762\u70b9\u51fb\u5230\u6253\u62db\u547c\u6309\u94ae\u3002"));
 }
 
-async function waitForGreetingComposerAcrossTabs(preferredTabId, message, timeoutMs = 10000) {
+async function waitForGreetingComposerAcrossTabs(preferredTabId, message, item, timeoutMs = 10000) {
   const startedAt = Date.now();
   let latest = null;
   while (Date.now() - startedAt <= timeoutMs) {
     const tabs = await getInspectableBossTabs(preferredTabId);
     for (const candidateTab of tabs) {
-      latest = await inspectGreetingComposerInTab(candidateTab.id, message);
+      latest = await inspectGreetingComposerInTab(candidateTab.id, message, item);
       latest = { ...latest, tabId: candidateTab.id, tabUrl: candidateTab.url || "", tabTitle: candidateTab.title || "" };
       if (latest.blockedReason || (latest.inputSelector && latest.filled)) return latest;
     }
@@ -312,11 +312,11 @@ function tabGreetingPriority(url = "") {
   return 0;
 }
 
-async function waitForGreetingComposerInTab(tabId, message, timeoutMs = 9000) {
+async function waitForGreetingComposerInTab(tabId, message, item, timeoutMs = 9000) {
   const startedAt = Date.now();
   let latest = null;
   while (Date.now() - startedAt <= timeoutMs) {
-    latest = await inspectGreetingComposerInTab(tabId, message);
+    latest = await inspectGreetingComposerInTab(tabId, message, item);
     if (latest.blockedReason || (latest.inputSelector && latest.filled)) return latest;
     await sleep(700);
   }
@@ -336,7 +336,7 @@ function normalizeComposerFailure(result) {
   return result;
 }
 
-async function inspectGreetingComposerInTab(tabId, message) {
+async function inspectGreetingComposerInTab(tabId, message, item) {
   const frames = await prepareFrames(tabId);
   const results = [];
   for (const frame of frames) {
@@ -347,12 +347,12 @@ async function inspectGreetingComposerInTab(tabId, message) {
     try {
       const [result] = await chrome.scripting.executeScript({
         target: { tabId, frameIds: [frame.frameId] },
-        func: (messageText) => {
+        func: (messageText, candidate) => {
           const inspect = globalThis.__recruitmentAssistantInspectGreetingComposer;
           if (typeof inspect !== "function") return { ok: false, reason: "\u6253\u62db\u547c\u8f93\u5165\u6846\u8bc6\u522b\u811a\u672c\u672a\u52a0\u8f7d\u3002", href: location.href, path: location.pathname };
-          return inspect({ message: messageText, fill: true, send: false });
+          return inspect({ message: messageText, fill: true, send: false, candidate });
         },
-        args: [message]
+        args: [message, item]
       });
       results.push({ ...(result?.result || { ok: false, reason: "\u8f93\u5165\u6846\u8bc6\u522b\u811a\u672c\u6ca1\u6709\u8fd4\u56de\u7ed3\u679c\u3002" }), frameId: frame.frameId, frameUrl: frame.url, framePath: pathFromUrl(frame.url) });
     } catch (error) {
@@ -421,7 +421,7 @@ async function runGreetingBatchStep({ startNew }) {
 
     const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const inspectTabId = activeTab?.id && activeTab.url?.includes("zhipin.com") ? activeTab.id : tab.id;
-    const composerResult = await waitForGreetingComposerAcrossTabs(inspectTabId, message);
+    const composerResult = await waitForGreetingComposerAcrossTabs(inspectTabId, message, item);
 
     const recordResponse = await fetch(`${localBaseUrl}/api/extension/greeting-batch/record`, {
       method: "POST",
@@ -512,6 +512,7 @@ function numberInputValue(input, fallback) {
 }
 
 function greetingBatchStepStatusText(batch, record, composerResult) {
+  if (record?.status === "direct_greeted") return record.errorMessage || "\u63a8\u8350\u9875\u6309\u94ae\u5df2\u53d8\u4e3a\u7ee7\u7eed\u6c9f\u901a\uff0c\u89c6\u4e3a\u5df2\u76f4\u63a5\u6253\u62db\u547c\u3002";
   if (record?.status === "clicked_no_composer") return record.errorMessage || "\u63a8\u8350\u9875\u6253\u62db\u547c\u540e\u672a\u6253\u5f00\u8f93\u5165\u6846\uff0c\u5df2\u6682\u505c\u3002";
   if (record?.status === "blocked") return `\u6279\u91cf\u5df2\u505c\u6b62\uff1a${record.errorMessage || batch?.pauseReason || "blocked"}`;
   if (record?.status === "failed") return `\u6279\u91cf\u5904\u7406\u5931\u8d25\uff1a${record.errorMessage || "failed"}`;
@@ -778,7 +779,7 @@ function renderGreetingBatchResult(batch) {
   if (!batch) return;
 
   const summary = document.createElement("p");
-  summary.textContent = `\u6279\u91cf ${batchStateLabel(batch.status)} \u00b7 \u76ee\u6807 ${batch.targetCount} \u00b7 \u5df2\u586b\u5165 ${batch.filled} \u00b7 \u5931\u8d25 ${batch.failed} \u00b7 \u8df3\u8fc7 ${batch.skipped || 0} \u00b7 \u963b\u65ad ${batch.blocked}`;
+  summary.textContent = `\u6279\u91cf ${batchStateLabel(batch.status)} \u00b7 \u76ee\u6807 ${batch.targetCount} \u00b7 \u5df2\u586b\u5165 ${batch.filled} \u00b7 \u76f4\u63a5 ${batch.directGreeted || 0} \u00b7 \u5931\u8d25 ${batch.failed} \u00b7 \u8df3\u8fc7 ${batch.skipped || 0} \u00b7 \u963b\u65ad ${batch.blocked}`;
   resultEl.append(summary);
 
   if (batch.pauseReason) {
@@ -812,6 +813,7 @@ function batchStateLabel(status) {
   return status;
 }
 function batchRecordStatusLabel(status) {
+  if (status === "direct_greeted") return "\u76f4\u63a5\u6253\u62db\u547c";
   if (status === "clicked_no_composer") return "\u63a8\u8350\u9875\u65e0\u7f16\u8f91\u5668";
   if (status === "filled") return "\u5df2\u586b\u5165";
   if (status === "failed") return "\u5931\u8d25";
