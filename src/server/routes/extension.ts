@@ -151,7 +151,7 @@ type ExtensionGreetingBatchRecord = {
 type ExtensionGreetingBatchState = {
   id: string;
   status: "running" | "waiting_confirmation" | "waiting_interval" | "paused" | "completed" | "blocked";
-  mode: "manual_confirm";
+  mode: "direct_click";
   targetCount: number;
   intervalMinSeconds: number;
   intervalMaxSeconds: number;
@@ -299,7 +299,7 @@ export function createExtensionRouter({ db }: { db: AppDatabase }) {
     lastGreetingBatch = {
       id: `batch-${Date.now()}`,
       status: "running",
-      mode: "manual_confirm",
+      mode: "direct_click",
       targetCount,
       intervalMinSeconds,
       intervalMaxSeconds,
@@ -380,7 +380,7 @@ export function createExtensionRouter({ db }: { db: AppDatabase }) {
       db,
       jobId,
       candidates,
-      selectorNote: "候选人由 Chrome 扩展从已登录 BOSS 页面导入；发送按钮和输入框仍需在当前页面人工确认或后续扩展化。"
+      selectorNote: "候选人由 Chrome 扩展从已登录 BOSS 推荐页导入；打招呼通过推荐卡片按钮直接完成。"
     });
 
     eventHub.emit("filter-result", result);
@@ -516,8 +516,8 @@ function applyGreetingBatchRecord(record: ExtensionGreetingBatchRecord) {
       return;
     }
 
-    lastGreetingBatch.status = "waiting_confirmation";
-    lastGreetingBatch.pauseReason = "\u7b49\u5f85\u4eba\u5de5\u786e\u8ba4\u53d1\u9001\u5e76\u8fd4\u56de\u63a8\u8350\u9875\u540e\u7ee7\u7eed\u3002";
+    lastGreetingBatch.status = "waiting_interval";
+    lastGreetingBatch.pauseReason = "\u5df2\u8bc6\u522b\u5230\u8f93\u5165\u6846\uff0c\u4f46\u5f53\u524d\u63a8\u8350\u9875\u6a21\u5f0f\u4ee5\u5361\u7247\u6309\u94ae\u7ed3\u679c\u4e3a\u51c6\uff0c\u7b49\u5f85\u95f4\u9694\u540e\u7ee7\u7eed\u3002";
     lastGreetingBatch.nextAllowedAt = nextBatchAllowedAt(lastGreetingBatch.intervalMinSeconds, lastGreetingBatch.intervalMaxSeconds);
     return;
   }

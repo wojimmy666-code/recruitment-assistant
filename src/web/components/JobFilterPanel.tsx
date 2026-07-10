@@ -212,7 +212,7 @@ function GreetingBatchBox({ report }: { report: GreetingBatchState }) {
 
   return (
     <div className="diagnosticsBox greetingBatchBox">
-      <strong>{"\u6279\u91cf\u4eba\u5de5\u786e\u8ba4\u8fdb\u5ea6"}</strong>
+      <strong>{"\u6279\u91cf\u76f4\u63a5\u6253\u62db\u547c\u8fdb\u5ea6"}</strong>
       <span>{`${batchStatusLabel(report.status)} \u00b7 \u76ee\u6807 ${report.targetCount} \u00b7 \u5df2\u586b\u5165 ${report.filled} \u00b7 \u76f4\u63a5 ${report.directGreeted ?? 0} \u00b7 \u5931\u8d25 ${report.failed} \u00b7 \u8df3\u8fc7 ${report.skipped} \u00b7 \u963b\u65ad ${report.blocked}`}</span>
       <span>{`${report.intervalMinSeconds}-${report.intervalMaxSeconds}s \u95f4\u9694 \u00b7 \u961f\u5217 ${report.queueSize}`}</span>
       {report.pauseReason ? <code>{report.pauseReason}</code> : null}
@@ -237,7 +237,7 @@ function GreetingComposerDiagnosticsBox({ record }: { record: GreetingBatchState
 
   return (
     <div className="selectorGroup nestedDiagnostics">
-      <span>{"\u6700\u8fd1\u8f93\u5165\u533a\u8bca\u65ad"}</span>
+      <span>{"\u6700\u8fd1\u9875\u9762\u8bca\u65ad"}</span>
       <code>{`${record.composerResult.path || "frame"} \u00b7 \u9875\u9762\u6587\u672c ${record.composerResult.bodyTextLength}`}</code>
       {diagnostics.textHints.length ? <code>{`\u63d0\u793a\u6587\u6848\uff1a${diagnostics.textHints.slice(0, 8).join("\uff0c")}`}</code> : null}
       {diagnostics.inputCandidates.length ? (
@@ -261,7 +261,7 @@ function recordStatusLabel(status: string) {
 
 function batchStatusLabel(status: GreetingBatchState["status"]) {
   if (status === "running") return "\u8fd0\u884c\u4e2d";
-  if (status === "waiting_confirmation") return "\u7b49\u5f85\u4eba\u5de5\u786e\u8ba4";
+  if (status === "waiting_confirmation") return "\u7b49\u5f85\u95f4\u9694";
   if (status === "waiting_interval") return "\u7b49\u5f85\u95f4\u9694";
   if (status === "paused") return "\u5df2\u6682\u505c";
   if (status === "completed") return "\u5df2\u5b8c\u6210";

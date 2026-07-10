@@ -230,7 +230,7 @@ export type GreetingBatchRecord = {
 export type GreetingBatchState = {
   id: string;
   status: "running" | "waiting_confirmation" | "waiting_interval" | "paused" | "completed" | "blocked";
-  mode: "manual_confirm";
+  mode: "direct_click";
   targetCount: number;
   intervalMinSeconds: number;
   intervalMaxSeconds: number;
