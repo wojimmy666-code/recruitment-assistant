@@ -50,6 +50,22 @@ openAppButton.addEventListener("click", () => {
   void chrome.tabs.create({ url: localBaseUrl });
 });
 
+void refreshGreetingBatchSnapshot();
+
+async function refreshGreetingBatchSnapshot() {
+  try {
+    await assertLocalToolReady();
+    const response = await fetch(`${localBaseUrl}/api/extension/greeting-batch`);
+    if (!response.ok) return;
+    const batch = await response.json();
+    if (!batch) return;
+    statusEl.textContent = greetingBatchSnapshotText(batch);
+    renderGreetingBatchResult(batch);
+  } catch (_error) {
+    // Keep popup startup quiet when the local tool is not running.
+  }
+}
+
 async function collectCandidates(options = { applyFilter: false }) {
   setBusy(true, options.applyFilter ? "正在读取筛选条件..." : "正在读取当前页面...");
   resultEl.hidden = true;
@@ -388,20 +404,17 @@ function sleep(ms) {
 }
 
 async function runGreetingBatchStep({ startNew }) {
-  setBusy(true, startNew ? "\u6b63\u5728\u542f\u52a8\u6279\u91cf\u4eba\u5de5\u786e\u8ba4..." : "\u6b63\u5728\u51c6\u5907\u7ee7\u7eed\u4e0b\u4e00\u4e2a...");
-  resultEl.hidden = true;
-  resultEl.replaceChildren();
+  setBusy(true, startNew ? "\u6b63\u5728\u542f\u52a8\u6279\u91cf\u4eba\u5de5\u786e\u8ba4..." : "\u6b63\u5728\u68c0\u67e5\u6279\u91cf\u72b6\u6001...");
+  if (startNew) {
+    resultEl.hidden = true;
+    resultEl.replaceChildren();
+  }
 
   try {
     await assertLocalToolReady();
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id || !tab.url?.includes("zhipin.com")) {
-      throw new Error("\u8bf7\u5148\u5207\u6362\u5230 BOSS \u63a8\u8350\u9875\uff0c\u5e76\u786e\u4fdd\u5df2\u767b\u5f55\u3002");
-    }
-
     const nextPayload = startNew ? await startGreetingBatch() : await getNextGreetingBatchItemFromServer();
     if (nextPayload.waitSeconds > 0) {
-      statusEl.textContent = `\u8ddd\u79bb\u4e0b\u4e00\u6b21\u53ef\u64cd\u4f5c\u8fd8\u9700\u7b49\u5f85 ${nextPayload.waitSeconds} \u79d2\u3002`;
+      statusEl.textContent = greetingBatchWaitText(nextPayload.batch, nextPayload.waitSeconds);
       renderGreetingBatchResult(nextPayload.batch);
       return;
     }
@@ -410,6 +423,11 @@ async function runGreetingBatchStep({ startNew }) {
       statusEl.textContent = batchDoneText(nextPayload.batch);
       renderGreetingBatchResult(nextPayload.batch);
       return;
+    }
+
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id || !tab.url?.includes("zhipin.com")) {
+      throw new Error("\u8bf7\u5148\u5207\u6362\u5230 BOSS \u63a8\u8350\u9875\uff0c\u5e76\u786e\u4fdd\u5df2\u767b\u5f55\u3002");
     }
 
     const message = await getDefaultGreetingMessage();
@@ -511,6 +529,22 @@ function numberInputValue(input, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function greetingBatchSnapshotText(batch) {
+  if (batch?.status === "waiting_interval") return greetingBatchWaitText(batch, getBatchRemainingSeconds(batch));
+  return batchDoneText(batch);
+}
+
+function greetingBatchWaitText(batch, waitSeconds) {
+  const seconds = Math.max(0, Number(waitSeconds || 0));
+  const nextAt = batch?.nextAllowedAt ? new Date(batch.nextAllowedAt).toLocaleTimeString() : "";
+  const suffix = nextAt ? `\uff0c\u4e0b\u6b21\u6700\u65e9\u65f6\u95f4 ${nextAt}` : "";
+  return `\u95f4\u9694\u4fdd\u62a4\u4e2d\uff0c\u8ddd\u79bb\u4e0b\u4e00\u4e2a\u8fd8\u9700\u7b49\u5f85 ${seconds} \u79d2${suffix}\u3002`;
+}
+
+function getBatchRemainingSeconds(batch) {
+  if (!batch?.nextAllowedAt) return 0;
+  return Math.max(0, Math.ceil((new Date(batch.nextAllowedAt).getTime() - Date.now()) / 1000));
+}
 function greetingBatchStepStatusText(batch, record, composerResult) {
   if (record?.status === "direct_greeted") return record.errorMessage || "\u63a8\u8350\u9875\u6309\u94ae\u5df2\u53d8\u4e3a\u7ee7\u7eed\u6c9f\u901a\uff0c\u89c6\u4e3a\u5df2\u76f4\u63a5\u6253\u62db\u547c\u3002";
   if (record?.status === "clicked_no_composer") return record.errorMessage || "\u63a8\u8350\u9875\u6253\u62db\u547c\u540e\u672a\u6253\u5f00\u8f93\u5165\u6846\uff0c\u5df2\u6682\u505c\u3002";
