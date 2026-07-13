@@ -1,37 +1,49 @@
 {
-    "manifest_version":  3,
-    "name":  "Recruitment Assistant Bridge",
-    "version":  "0.3.4",
-    "description":  "Bridge logged-in BOSS pages to the local recruitment assistant.",
-    "action":  {
-                   "default_popup":  "popup.html",
-                   "default_title":  "Recruitment Assistant"
-               },
-    "background":  {
-                       "service_worker":  "background.js"
-                   },
-    "permissions":  [
-                        "activeTab",
-                        "tabs",
-                        "scripting",
-                        "webNavigation",
-                        "alarms",
-                        "storage"
-                    ],
-    "host_permissions":  [
-                             "https://www.zhipin.com/*",
-                             "http://localhost:3000/*"
-                         ],
-    "content_scripts":  [
-                            {
-                                "matches":  [
-                                                "https://www.zhipin.com/*"
-                                            ],
-                                "js":  [
-                                           "content-script.js"
-                                       ],
-                                "run_at":  "document_idle",
-                                "all_frames":  true
-                            }
-                        ]
+  "manifest_version": 3,
+  "name": "Recruitment Assistant Bridge",
+  "version": "0.3.7",
+  "description": "Bridge logged-in BOSS pages to the local recruitment assistant.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Recruitment Assistant",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "scripting",
+    "webNavigation",
+    "alarms",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://www.zhipin.com/*",
+    "http://localhost:3000/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.zhipin.com/*"
+      ],
+      "js": [
+        "content-script.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ]
 }

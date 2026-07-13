@@ -22,6 +22,8 @@ export function initDb() {
       salary_min INTEGER,
       salary_max INTEGER,
       active_within TEXT,
+      job_intentions TEXT,
+      experience_requirements TEXT,
       gender TEXT,
       age_min INTEGER,
       age_max INTEGER,
@@ -94,10 +96,37 @@ function ensureJobFilterColumns(db: AppDatabase) {
   if (!columns.has("gender")) db.exec("ALTER TABLE jobs ADD COLUMN gender TEXT");
   if (!columns.has("age_min")) db.exec("ALTER TABLE jobs ADD COLUMN age_min INTEGER");
   if (!columns.has("age_max")) db.exec("ALTER TABLE jobs ADD COLUMN age_max INTEGER");
+  if (!columns.has("job_intentions")) db.exec("ALTER TABLE jobs ADD COLUMN job_intentions TEXT");
+  if (!columns.has("experience_requirements")) db.exec("ALTER TABLE jobs ADD COLUMN experience_requirements TEXT");
 }
 
 export function getDefaultJob(db: AppDatabase) {
-  return db.prepare("SELECT * FROM jobs ORDER BY id LIMIT 1").get() as Job | undefined;
+  return deserializeJob(db.prepare("SELECT * FROM jobs ORDER BY id LIMIT 1").get());
+}
+
+export function deserializeJob(row: unknown): Job | undefined {
+  if (!row || typeof row !== "object") return undefined;
+  const value = row as Record<string, unknown>;
+  return {
+    ...value,
+    job_intentions: parseStoredStringArray(value.job_intentions),
+    experience_requirements: parseStoredStringArray(value.experience_requirements)
+  } as Job;
+}
+
+function parseStoredStringArray(value: unknown) {
+  if (Array.isArray(value)) return uniqueStrings(value);
+  if (typeof value !== "string" || !value.trim()) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? uniqueStrings(parsed) : [];
+  } catch {
+    return uniqueStrings(value.split(/[，,]/));
+  }
+}
+
+function uniqueStrings(values: unknown[]) {
+  return Array.from(new Set(values.map((item) => String(item || "").trim()).filter(Boolean)));
 }
 
 export function getDefaultTemplate(db: AppDatabase) {

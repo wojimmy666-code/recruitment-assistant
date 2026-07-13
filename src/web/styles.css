@@ -338,6 +338,82 @@ code {
   font-size: 10px;
 }
 
+.multiSelectField {
+  display: grid;
+  gap: 4px;
+  color: var(--label);
+  font-size: 12px;
+}
+
+.multiSelectControl {
+  border: 1px solid var(--input-border);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.multiSelectControl summary {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 9px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.multiSelectControl summary::-webkit-details-marker {
+  display: none;
+}
+
+.multiSelectControl summary span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multiSelectControl summary svg {
+  flex: 0 0 auto;
+  color: var(--muted);
+  transition: transform 140ms ease;
+}
+
+.multiSelectControl[open] summary svg {
+  transform: rotate(180deg);
+}
+
+.multiSelectMenu {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 4px;
+  border-top: 1px solid var(--border);
+  padding: 6px;
+}
+
+.multiSelectOption {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  border-radius: 4px;
+  padding: 5px 4px;
+  color: var(--text);
+  font-size: 11px;
+}
+
+.multiSelectOption:hover {
+  background: #f3f7f5;
+}
+
+.multiSelectOption input {
+  width: 14px;
+  min-height: 14px;
+  flex: 0 0 auto;
+  margin: 0;
+}
+
 .check {
   gap: 7px;
 }

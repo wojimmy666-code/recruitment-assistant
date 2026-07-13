@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <title>Recruitment Assistant B icon</title>
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="#00BEBB"/>
+  <rect x="5" y="5" width="118" height="118" rx="27" fill="none" stroke="#FFFFFF" stroke-opacity="0.24" stroke-width="2"/>
+  <path
+    d="M34 23H66C82 23 93 32 93 46C93 55 89 62 81 66C91 70 97 78 97 90C97 106 85 115 66 115H34V23ZM52 39V59H64C72 59 76 55 76 49C76 43 72 39 64 39H52ZM52 75V99H65C74 99 79 95 79 87C79 79 74 75 65 75H52Z"
+    fill="#007F7D"
+    fill-opacity="0.24"
+    fill-rule="evenodd"
+    transform="translate(3 3)"
+  />
+  <path
+    d="M34 23H66C82 23 93 32 93 46C93 55 89 62 81 66C91 70 97 78 97 90C97 106 85 115 66 115H34V23ZM52 39V59H64C72 59 76 55 76 49C76 43 72 39 64 39H52ZM52 75V99H65C74 99 79 95 79 87C79 79 74 75 65 75H52Z"
+    fill="#FFFFFF"
+    fill-rule="evenodd"
+  />
+</svg>

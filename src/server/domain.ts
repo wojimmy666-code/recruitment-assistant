@@ -12,6 +12,8 @@ export type Job = {
   salary_min: number | null;
   salary_max: number | null;
   active_within: string | null;
+  job_intentions: string[];
+  experience_requirements: string[];
   gender: "男" | "女" | null;
   age_min: number | null;
   age_max: number | null;
@@ -65,6 +67,8 @@ export type FilterInput = {
   city?: string;
   keywords?: string;
   activeWithin?: string;
+  jobIntentions?: string[];
+  experienceRequirements?: string[];
   salaryMin?: number;
   salaryMax?: number;
   gender?: "男" | "女";

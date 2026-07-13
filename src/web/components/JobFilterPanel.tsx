@@ -1,4 +1,4 @@
-import { Save } from "lucide-react";
+import { ChevronDown, Save } from "lucide-react";
 import type { Job } from "../api";
 
 type Props = {
@@ -68,6 +68,18 @@ export function JobFilterPanel({ job, saving, candidateCount, onChange, onSave }
             />
           </span>
         </label>
+        <MultiSelectField
+          label="求职意向"
+          options={JOB_INTENTION_OPTIONS}
+          values={job.job_intentions}
+          onChange={(jobIntentions) => onChange({ ...job, job_intentions: jobIntentions })}
+        />
+        <MultiSelectField
+          label="经验要求"
+          options={EXPERIENCE_REQUIREMENT_OPTIONS}
+          values={job.experience_requirements}
+          onChange={(experienceRequirements) => onChange({ ...job, experience_requirements: experienceRequirements })}
+        />
         <label className="span2">
           关键词
           <input value={job.keywords ?? ""} onChange={(event) => onChange({ ...job, keywords: event.target.value })} />
@@ -96,6 +108,65 @@ export function JobFilterPanel({ job, saving, candidateCount, onChange, onSave }
       <p className="sectionNote">保存后，扩展和本地诊断将读取这组条件。</p>
     </section>
   );
+}
+
+const JOB_INTENTION_OPTIONS = ["离职-随时到岗", "在职-暂不考虑", "在职-考虑机会", "在职-月内到岗"];
+const EXPERIENCE_REQUIREMENT_OPTIONS = ["在校/应届", "25年毕业", "26年毕业", "26年后毕业", "1年以内", "1-3年", "3-5年", "5-10年", "10年以上"];
+
+function MultiSelectField({
+  label,
+  options,
+  values,
+  onChange
+}: {
+  label: string;
+  options: string[];
+  values: string[] | null | undefined;
+  onChange: (values: string[]) => void;
+}) {
+  const selected = normalizeMultiSelectValues(values, options);
+  return (
+    <div className="span2 multiSelectField">
+      <span>{label}</span>
+      <details className="multiSelectControl">
+        <summary>
+          <span>{multiSelectSummary(selected)}</span>
+          <ChevronDown size={14} aria-hidden="true" />
+        </summary>
+        <div className="multiSelectMenu">
+          <label className="multiSelectOption">
+            <input type="checkbox" checked={selected.length === 0} onChange={() => onChange([])} />
+            不限
+          </label>
+          {options.map((option) => (
+            <label className="multiSelectOption" key={option}>
+              <input
+                type="checkbox"
+                checked={selected.includes(option)}
+                onChange={() => onChange(toggleMultiSelectValue(selected, option))}
+              />
+              {option}
+            </label>
+          ))}
+        </div>
+      </details>
+    </div>
+  );
+}
+
+function normalizeMultiSelectValues(values: string[] | null | undefined, options: string[]) {
+  if (!Array.isArray(values)) return [];
+  return Array.from(new Set(values.filter((value) => options.includes(value))));
+}
+
+function toggleMultiSelectValue(values: string[], option: string) {
+  return values.includes(option) ? values.filter((value) => value !== option) : [...values, option];
+}
+
+function multiSelectSummary(values: string[]) {
+  if (values.length === 0) return "不限";
+  if (values.length <= 2) return values.join("、");
+  return `${values[0]}等 ${values.length} 项`;
 }
 
 function toNullableNumber(value: string) {

@@ -1,4 +1,4 @@
-import type { AppDatabase } from "../db";
+import { deserializeJob, type AppDatabase } from "../db";
 import type { FilterInput, Job, SiteAdapter } from "../domain";
 import { updateRuntime } from "../runtime";
 import { saveCandidatesForJob } from "./candidate-service";
@@ -12,7 +12,7 @@ export async function runFilterForJob({
   adapter: SiteAdapter;
   jobId: number;
 }) {
-  const job = db.prepare("SELECT * FROM jobs WHERE id = ?").get(jobId) as Job | undefined;
+  const job = deserializeJob(db.prepare("SELECT * FROM jobs WHERE id = ?").get(jobId));
   if (!job) throw new Error("job_not_found");
 
   updateRuntime({ filterStatus: "filtering", lastError: null }, "filter");
@@ -41,6 +41,8 @@ function toFilterInput(job: Job): FilterInput {
     city: job.city ?? undefined,
     keywords: job.keywords ?? undefined,
     activeWithin: job.active_within ?? undefined,
+    jobIntentions: job.job_intentions,
+    experienceRequirements: job.experience_requirements,
     salaryMin: job.salary_min ?? undefined,
     salaryMax: job.salary_max ?? undefined,
     gender: job.gender ?? undefined,

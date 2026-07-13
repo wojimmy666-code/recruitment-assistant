@@ -325,7 +325,7 @@ export function createExtensionRouter({ db }: { db: AppDatabase }) {
     }
 
     const now = new Date().toISOString();
-    const targetCount = clampNumber(req.body.targetCount ?? req.body.target_count, 1, 20, 3);
+    const targetCount = clampNumber(req.body.targetCount ?? req.body.target_count, 1, 200, 3);
     const intervalMinSeconds = clampNumber(req.body.intervalMinSeconds ?? req.body.interval_min_seconds, 30, 3600, 45);
     const intervalMaxSeconds = clampNumber(req.body.intervalMaxSeconds ?? req.body.interval_max_seconds, intervalMinSeconds, 7200, Math.max(intervalMinSeconds, 90));
     const filterFields = normalizeStringArray(req.body.filterFields, 20, 40);

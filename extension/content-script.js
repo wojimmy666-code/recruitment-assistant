@@ -503,7 +503,7 @@ function collectFilterControlDiagnostics() {
   const inputs = inspectFilterElements("input, textarea, [contenteditable='true'], [role='slider'], [class*='slider-handle'], [class*='range-handle'], [class*='slider'] [class*='handle'], [class*='slider'] [class*='thumb'], [class*='slider'] [class*='button']", () => true, 100);
   const clickables = inspectFilterElements("button, a, label, li, dt, dd, span, div, [role='button']", hasFilterDiagnosticText, 180);
   const submitControls = clickables.filter((item) => /(确定|确认|完成|应用|筛选|搜索|查看结果|搜索牛人|查找牛人|开始搜索|立即搜索|立即筛选|确认选择)/.test(item.text || item.attrs?.["aria-label"] || item.attrs?.title || ""));
-  const filterControls = clickables.filter((item) => /(关键词|搜索|职位|岗位|牛人|人才|意向|期望|城市|地点|地区|工作地|活跃|活跃度|最近活跃|登录时间|性别|年龄|男|女|薪资|月薪|薪酬|不限|近\s*\d|K|以上|以下)/i.test(item.text || item.attrs?.placeholder || item.attrs?.["aria-label"] || item.attrs?.title || ""));
+  const filterControls = clickables.filter((item) => /(关键词|搜索|职位|岗位|牛人|人才|意向|期望|求职意向|求职状态|到岗|经验要求|工作经验|在校|应届|毕业|城市|地点|地区|工作地|活跃|活跃度|最近活跃|登录时间|性别|年龄|男|女|薪资|月薪|薪酬|不限|近\s*\d|K|以上|以下)/i.test(item.text || item.attrs?.placeholder || item.attrs?.["aria-label"] || item.attrs?.title || ""));
   const candidateContainers = (isChatCandidatePage() ? findCandidateListContainers() : [])
     .slice(0, 20)
     .map((element) => inspectElementForDiagnostics(element));
@@ -563,7 +563,7 @@ function inspectElementForDiagnostics(element) {
 function hasFilterDiagnosticText(element) {
   const text = controlTextForDiagnostics(element);
   if (!text || text.length > 160) return false;
-  return /(搜索|筛选|城市|地区|地点|工作地|活跃|登录|性别|年龄|男|女|薪资|月薪|期望|确定|确认|完成|应用|查看|牛人|关键词|职位|岗位|不限|近\s*\d|K|以上|以下|重置|清空)/i.test(text);
+  return /(搜索|筛选|城市|地区|地点|工作地|活跃|登录|求职意向|求职状态|到岗|经验要求|工作经验|在校|应届|毕业|性别|年龄|男|女|薪资|月薪|期望|确定|确认|完成|应用|查看|牛人|关键词|职位|岗位|不限|近\s*\d|K|以上|以下|重置|清空)/i.test(text);
 }
 
 function controlTextForDiagnostics(element) {
@@ -581,7 +581,7 @@ function collectFilterTextHints() {
   for (const element of visibleControlElements("button, a, label, li, dt, dd, span, div, input, textarea, [contenteditable='true'], [role='button']")) {
     const text = controlTextForDiagnostics(element);
     if (!text || text.length > 80) continue;
-    if (!/(搜索|筛选|城市|地区|地点|工作地|活跃|登录|性别|年龄|男|女|薪资|月薪|期望|确定|确认|完成|应用|查看|牛人|关键词|职位|岗位|不限|近\s*\d|K|以上|以下|重置|清空)/i.test(text)) continue;
+    if (!/(搜索|筛选|城市|地区|地点|工作地|活跃|登录|求职意向|求职状态|到岗|经验要求|工作经验|在校|应届|毕业|性别|年龄|男|女|薪资|月薪|期望|确定|确认|完成|应用|查看|牛人|关键词|职位|岗位|不限|近\s*\d|K|以上|以下|重置|清空)/i.test(text)) continue;
     if (!hints.includes(text)) hints.push(text);
     if (hints.length >= 80) break;
   }
@@ -749,6 +749,8 @@ async function applyRecruitmentFilters(job) {
   const keyword = normalizeText(job?.keywords || job?.name || "");
   const city = normalizeText(job?.city || "");
   const activeWithin = normalizeText(job?.active_within || "");
+  const jobIntentions = normalizeMultiSelectFilterValues(job?.job_intentions);
+  const experienceRequirements = normalizeMultiSelectFilterValues(job?.experience_requirements);
   const gender = normalizeGenderFilter(job?.gender);
   const ageRange = normalizeAgeFilterRange(job?.age_min, job?.age_max);
   const salaryOptions = buildSalaryOptions(job?.salary_min, job?.salary_max);
@@ -810,6 +812,32 @@ async function applyRecruitmentFilters(job) {
       softWarnings.push("推荐页没有可匹配的活跃时间控件，将在点击前按候选卡片活跃时间校验。");
     } else {
       warnings.push("未找到活跃时间筛选控件");
+    }
+  }
+
+  if (jobIntentions.length > 0) {
+    if (await chooseMultipleExactFilterOptions(/求职意向|求职状态|到岗状态/, jobIntentions)) {
+      fields.push("求职意向");
+      await waitForUiSettle(250);
+    } else if (recommendFrame) {
+      fields.push("求职意向（本地校验）");
+      localFilterFields.push("job_intentions");
+      softWarnings.push("未能确认 BOSS 求职意向多选，将在点击前按候选卡片到岗状态校验。");
+    } else {
+      warnings.push(`未找到可匹配的求职意向选项：${jobIntentions.join("、")}`);
+    }
+  }
+
+  if (experienceRequirements.length > 0) {
+    if (await chooseMultipleExactFilterOptions(/经验要求|工作经验|经验/, experienceRequirements)) {
+      fields.push("经验要求");
+      await waitForUiSettle(250);
+    } else if (recommendFrame) {
+      fields.push("经验要求（本地校验）");
+      localFilterFields.push("experience_requirements");
+      softWarnings.push("未能确认 BOSS 经验要求多选，将在点击前按候选卡片经验校验。");
+    } else {
+      warnings.push(`未找到可匹配的经验要求选项：${experienceRequirements.join("、")}`);
     }
   }
 
@@ -1154,6 +1182,35 @@ async function chooseExactFilterOption(groupPattern, optionTexts) {
   }
   if (!option) return false;
   if (!isSelectedFilterOption(option)) clickElement(option);
+  return true;
+}
+
+async function chooseMultipleExactFilterOptions(groupPattern, optionTexts) {
+  const expected = normalizeMultiSelectFilterValues(optionTexts);
+  if (expected.length === 0) return true;
+
+  let firstOption = findExactFilterOption(groupPattern, [expected[0]]);
+  if (!firstOption) {
+    const trigger = findClickableByText(groupPattern) || findControlContainerByText(groupPattern);
+    if (trigger) {
+      clickElement(trigger);
+      await waitForUiSettle(350);
+      firstOption = findExactFilterOption(groupPattern, [expected[0]]);
+    }
+  }
+  if (!firstOption) return false;
+
+  const resetOption = findExactFilterOption(groupPattern, ["不限"]);
+  if (!resetOption) return false;
+  clickElement(resetOption);
+  await waitForUiSettle(120);
+
+  for (const optionText of expected) {
+    const option = findExactFilterOption(groupPattern, [optionText]);
+    if (!option) return false;
+    if (!isSelectedFilterOption(option)) clickElement(option);
+    await waitForUiSettle(100);
+  }
   return true;
 }
 
@@ -1510,6 +1567,20 @@ function normalizeFilterOptionText(value) {
 function normalizeGenderFilter(value) {
   const gender = normalizeText(value || "");
   return gender === "男" || gender === "女" ? gender : "";
+}
+
+function normalizeMultiSelectFilterValues(value) {
+  let values = value;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      values = Array.isArray(parsed) ? parsed : value.split(/[，,]/);
+    } catch {
+      values = value.split(/[，,]/);
+    }
+  }
+  if (!Array.isArray(values)) return [];
+  return Array.from(new Set(values.map((item) => normalizeText(item || "")).filter((item) => item && item !== "不限")));
 }
 
 function buildActiveFilterLabels(value) {
@@ -1888,9 +1959,9 @@ function extractRecommendQueueFields(text) {
     salary: firstRecommendMatch(text, [/\u9762\u8bae/, /\d+\s*-\s*\d+\s*[Kk]/, /\d+\s*[Kk]\s*(?:\u4ee5\u4e0a|\u4ee5\u4e0b)?/]),
     activeText: firstRecommendMatch(text, [/\u521a\u521a\u6d3b\u8dc3/, /\u4eca(?:\u65e5|\u5929)\u6d3b\u8dc3/, /\u672c\u5468\u6d3b\u8dc3/, /\d+\s*\u65e5\u5185\u6d3b\u8dc3/, /\u8fd1\s*\d+\s*\u5929\u6d3b\u8dc3/, /[^\s]{0,8}\u6d3b\u8dc3/]),
     age: firstRecommendMatch(text, [/\d{2}\s*\u5c81/]),
-    experience: firstRecommendMatch(text, [/10\s*\u5e74\u4ee5\u4e0a/, /\d+\s*\u5e74\u4ee5\u4e0a/, /\d+\s*\u5e74/]),
+    experience: firstRecommendMatch(text, [/在校\/?应届/, /在校/, /应届(?:生)?/, /(?:20)?\d{2}\s*年(?:后)?毕业/, /\d+\s*年以内/, /\d+\s*-\s*\d+\s*年/, /10\s*年以上/, /\d+\s*年以上/, /\d+\s*年/]),
     education: firstRecommendMatch(text, [/\u521d\u4e2d\u53ca\u4ee5\u4e0b/, /\u4e2d\u4e13\/\u4e2d\u6280/, /\u4e2d\u4e13/, /\u9ad8\u4e2d/, /\u5927\u4e13/, /\u672c\u79d1/, /\u7855\u58eb/, /\u535a\u58eb/]),
-    arrival: firstRecommendMatch(text, [/\u79bb\u804c-\u968f\u65f6\u5230\u5c97/, /\u968f\u65f6\u5230\u5c97/, /\u6708\u5185\u5230\u5c97/, /\u79bb\u804c/, /\u5728\u804c/])
+    arrival: firstRecommendMatch(text, [/离职-随时到岗/, /在职-暂不考虑/, /在职-考虑机会/, /在职-月内到岗/, /随时到岗/, /月内到岗/, /暂不考虑/, /考虑机会/, /离职/, /在职/])
   };
 }
 
@@ -2261,6 +2332,26 @@ function evaluateLocalCandidateFilters(item, job, localFilterFields) {
     }
   }
 
+  if (enabledFields.has("job_intentions")) {
+    const expectedIntentions = normalizeMultiSelectFilterValues(job?.job_intentions);
+    if (expectedIntentions.length > 0 && !expectedIntentions.some((intention) => candidateMatchesJobIntention(item?.arrival || cardText, intention))) {
+      return {
+        matched: false,
+        reason: `求职意向 ${item?.arrival || "未知"} 不符合 ${expectedIntentions.join("、")}`
+      };
+    }
+  }
+
+  if (enabledFields.has("experience_requirements")) {
+    const expectedExperience = normalizeMultiSelectFilterValues(job?.experience_requirements);
+    if (expectedExperience.length > 0 && !expectedExperience.some((requirement) => candidateMatchesExperienceRequirement(item?.experience || "", requirement))) {
+      return {
+        matched: false,
+        reason: `经验 ${item?.experience || "未知"} 不符合 ${expectedExperience.join("、")}`
+      };
+    }
+  }
+
   if (enabledFields.has("age")) {
     const ageRange = normalizeAgeFilterRange(job?.age_min, job?.age_max);
     const candidateAge = parseCandidateAge(item?.age || cardText);
@@ -2276,6 +2367,52 @@ function evaluateLocalCandidateFilters(item, job, localFilterFields) {
   }
 
   return { matched: true, reason: "" };
+}
+
+function candidateMatchesJobIntention(value, expected) {
+  const text = normalizeText(value || "").replace(/\s+/g, "");
+  if (!text) return false;
+  if (expected === "离职-随时到岗") return /离职.*随时到岗|随时到岗/.test(text);
+  if (expected === "在职-暂不考虑") return /在职.*暂不考虑|暂不考虑/.test(text);
+  if (expected === "在职-考虑机会") return /在职.*考虑机会|考虑机会/.test(text);
+  if (expected === "在职-月内到岗") return /在职.*月内到岗|月内到岗/.test(text);
+  return looseTextIncludes(text, expected);
+}
+
+function candidateMatchesExperienceRequirement(value, expected) {
+  const text = normalizeText(value || "").replace(/\s+/g, "");
+  if (!text) return false;
+  if (expected === "在校/应届") return /在校|应届/.test(text);
+
+  const graduation = text.match(/(?:20)?(\d{2})年(?:后)?毕业/);
+  if (expected === "25年毕业") return Boolean(graduation && Number(graduation[1]) === 25 && !text.includes("年后毕业"));
+  if (expected === "26年毕业") return Boolean(graduation && Number(graduation[1]) === 26 && !text.includes("年后毕业"));
+  if (expected === "26年后毕业") return Boolean(graduation && (Number(graduation[1]) > 26 || text.includes("26年后毕业")));
+
+  const range = parseCandidateExperienceRange(text);
+  if (!range) return false;
+  if (expected === "1年以内") return experienceRangesOverlap(range, { min: 0, max: 1 });
+  if (expected === "1-3年") return experienceRangesOverlap(range, { min: 1, max: 3 });
+  if (expected === "3-5年") return experienceRangesOverlap(range, { min: 3, max: 5 });
+  if (expected === "5-10年") return experienceRangesOverlap(range, { min: 5, max: 10 });
+  if (expected === "10年以上") return range.max >= 10;
+  return false;
+}
+
+function parseCandidateExperienceRange(value) {
+  const range = value.match(/(\d+)\s*-\s*(\d+)年/);
+  if (range) return { min: Number(range[1]), max: Number(range[2]) };
+  const within = value.match(/(\d+)年以内/);
+  if (within) return { min: 0, max: Number(within[1]) };
+  const above = value.match(/(\d+)年以上/);
+  if (above) return { min: Number(above[1]), max: Number.POSITIVE_INFINITY };
+  const exact = value.match(/(\d+)年/);
+  if (exact) return { min: Number(exact[1]), max: Number(exact[1]) };
+  return null;
+}
+
+function experienceRangesOverlap(left, right) {
+  return left.min <= right.max && right.min <= left.max;
 }
 
 function parseCandidateAge(value) {

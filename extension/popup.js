@@ -25,10 +25,7 @@ let lastGreetingBatchSnapshot = null;
 let greetingBatchRefreshTimer = null;
 
 for (const input of [batchTargetInput, batchIntervalMinInput, batchIntervalMaxInput]) {
-  input?.addEventListener("input", () => {
-    if (hasCompleteBatchPreferenceInputs()) saveBatchPreferencesQuietly(false);
-  });
-  input?.addEventListener("change", () => saveBatchPreferencesQuietly(true));
+  input?.addEventListener("change", () => saveBatchPreferencesQuietly());
 }
 
 collectButton?.addEventListener("click", () => {
@@ -448,9 +445,7 @@ async function runGreetingBatchStep({ startNew }) {
   }
 
   try {
-    const preferences = startNew
-      ? await saveBatchPreferences({ applyToInputs: true })
-      : null;
+    const preferences = startNew ? await saveBatchPreferences() : null;
     await assertLocalToolReady();
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id || !tab.url?.includes("zhipin.com/web/chat/recommend")) {
@@ -469,6 +464,13 @@ async function runGreetingBatchStep({ startNew }) {
 
     if (!response?.ok) throw new Error(response?.error || "批量操作失败。");
     const batch = response.batch;
+    if (startNew && batch) {
+      applyBatchPreferencesToInputs({
+        targetCount: batch.targetCount,
+        intervalMinSeconds: batch.intervalMinSeconds,
+        intervalMaxSeconds: batch.intervalMaxSeconds
+      });
+    }
     lastGreetingBatchSnapshot = batch;
     updateBatchActionButtons(batch);
     statusEl.textContent = greetingBatchSnapshotText(batch);
@@ -524,29 +526,40 @@ async function restoreBatchPreferences() {
   }
 }
 
-async function saveBatchPreferences({ applyToInputs = false } = {}) {
-  const preferences = readBatchPreferencesFromInputs();
-  if (applyToInputs) applyBatchPreferencesToInputs(preferences);
+async function saveBatchPreferences() {
+  const preferences = readValidatedBatchPreferencesFromInputs();
   await chrome.storage.local.set({ [batchPreferencesStorageKey]: preferences });
   return preferences;
 }
 
-function saveBatchPreferencesQuietly(applyToInputs) {
-  void saveBatchPreferences({ applyToInputs }).catch(() => {
-    // Starting a batch retries the write and reports any storage error to the user.
+function saveBatchPreferencesQuietly() {
+  void saveBatchPreferences().catch((error) => {
+    if (statusEl) {
+      statusEl.textContent = error instanceof Error ? error.message : "批量参数保存失败。";
+    }
   });
 }
 
-function readBatchPreferencesFromInputs() {
-  return normalizeBatchPreferences({
-    targetCount: numberInputValue(batchTargetInput, defaultBatchPreferences.targetCount),
-    intervalMinSeconds: numberInputValue(batchIntervalMinInput, defaultBatchPreferences.intervalMinSeconds),
-    intervalMaxSeconds: numberInputValue(batchIntervalMaxInput, defaultBatchPreferences.intervalMaxSeconds)
-  });
+function readValidatedBatchPreferencesFromInputs() {
+  const targetCount = requiredIntegerInput(batchTargetInput, "目标人数");
+  const intervalMinSeconds = requiredIntegerInput(batchIntervalMinInput, "最小间隔");
+  const intervalMaxSeconds = requiredIntegerInput(batchIntervalMaxInput, "最大间隔");
+
+  if (targetCount < 1 || targetCount > 200) {
+    throw new Error("目标人数必须是 1-200 之间的整数。");
+  }
+  if (intervalMinSeconds < 30 || intervalMinSeconds > 3600) {
+    throw new Error("最小间隔必须是 30-3600 秒之间的整数。");
+  }
+  if (intervalMaxSeconds < intervalMinSeconds || intervalMaxSeconds > 7200) {
+    throw new Error("最大间隔必须不小于最小间隔，且不能超过 7200 秒。");
+  }
+
+  return { targetCount, intervalMinSeconds, intervalMaxSeconds };
 }
 
 function normalizeBatchPreferences(value = {}) {
-  const targetCount = clampInteger(value?.targetCount, 1, 20, defaultBatchPreferences.targetCount);
+  const targetCount = clampInteger(value?.targetCount, 1, 200, defaultBatchPreferences.targetCount);
   const intervalMinSeconds = clampInteger(value?.intervalMinSeconds, 30, 3600, defaultBatchPreferences.intervalMinSeconds);
   const intervalMaxSeconds = clampInteger(
     value?.intervalMaxSeconds,
@@ -563,18 +576,13 @@ function applyBatchPreferencesToInputs(preferences) {
   if (batchIntervalMaxInput) batchIntervalMaxInput.value = String(preferences.intervalMaxSeconds);
 }
 
-function hasCompleteBatchPreferenceInputs() {
-  return [batchTargetInput, batchIntervalMinInput, batchIntervalMaxInput].every((input) => {
-    const value = String(input?.value ?? "").trim();
-    return value !== "" && Number.isFinite(Number(value));
-  });
-}
-
-function numberInputValue(input, fallback) {
+function requiredIntegerInput(input, label) {
   const value = String(input?.value ?? "").trim();
-  if (!value) return fallback;
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
+  if (!value || !Number.isInteger(parsed)) {
+    throw new Error(`${label}必须填写整数。`);
+  }
+  return parsed;
 }
 
 function clampInteger(value, min, max, fallback) {
