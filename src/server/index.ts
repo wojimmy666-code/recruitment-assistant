@@ -1,6 +1,6 @@
 import express from "express";
 import path from "node:path";
-import { createServer as createViteServer } from "vite";
+
 import { BossAdapter } from "./automation/boss-adapter";
 import { initDb } from "./db";
 import { createScheduler } from "./scheduler";
@@ -20,6 +20,7 @@ import { SendService } from "./services/send-service";
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
+const host = process.env.HOST || "127.0.0.1";
 const isProduction = process.env.NODE_ENV === "production";
 
 const db = initDb();
@@ -57,6 +58,9 @@ app.use("/api/events", createEventsRouter());
 app.use("/api/browser", createBrowserRouter({ adapter }));
 app.use("/api/diagnostics", createDiagnosticsRouter());
 app.use("/api/extension", createExtensionRouter({ db }));
+app.get("/api/health", (_req, res) => {
+  res.json({ ok: true, service: "recruitment-assistant" });
+});
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   const message = error instanceof Error ? error.message : String(error);
@@ -69,6 +73,7 @@ if (isProduction) {
     res.sendFile(path.resolve("dist/index.html"));
   });
 } else {
+  const { createServer: createViteServer } = await import("vite");
   const vite = await createViteServer({
     server: { middlewareMode: true },
     appType: "spa"
@@ -76,11 +81,14 @@ if (isProduction) {
   app.use(vite.middlewares);
 }
 
-const server = app.listen(port, () => {
-  console.log(`Local recruitment tool running at http://localhost:${port}`);
+const server = app.listen(port, host, () => {
+  console.log(`Local recruitment tool running at http://${host}:${port}`);
 });
 
-process.on("SIGINT", () => {
+function shutdown() {
   scheduler.stop();
   server.close(() => process.exit(0));
-});
+}
+
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);

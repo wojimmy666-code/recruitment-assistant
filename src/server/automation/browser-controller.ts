@@ -47,7 +47,8 @@ export async function closeControlledBrowser() {
 }
 
 async function launchPersistentChrome() {
-  const userDataDir = path.resolve("data/chrome-profile");
+  const dataDir = path.resolve(process.env.APP_DATA_DIR || "data");
+  const userDataDir = path.join(dataDir, "chrome-profile");
   const options = {
     headless: false,
     viewport: { width: 1440, height: 1000 }

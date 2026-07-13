@@ -19,3 +19,8 @@ pnpm-debug.log*
 coverage/
 .DS_Store
 Thumbs.db
+
+release/.cache/
+release/recruitment-assistant-win-x64/
+release/*.zip
+release/*.sha256

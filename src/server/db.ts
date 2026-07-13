@@ -8,9 +8,11 @@ export type AppDatabase = Database.Database;
 const nowIso = () => new Date().toISOString();
 
 export function initDb() {
-  fs.mkdirSync("data", { recursive: true });
-  const db = new Database(path.resolve("data/app.sqlite"));
-  db.pragma("journal_mode = WAL");
+  const dataDir = path.resolve(process.env.APP_DATA_DIR || "data");
+  fs.mkdirSync(dataDir, { recursive: true });
+  const db = new Database(path.join(dataDir, "app.sqlite"));
+  const journalMode = process.env.DB_JOURNAL_MODE === "DELETE" ? "DELETE" : "WAL";
+  db.pragma('journal_mode = ' + journalMode);
   db.pragma("foreign_keys = ON");
 
   db.exec(`
