@@ -254,7 +254,7 @@ export type GreetingBatchCandidate = {
 
 export type GreetingBatchState = {
   id: string;
-  status: "running" | "waiting_confirmation" | "waiting_interval" | "paused" | "completed" | "blocked";
+  status: "running" | "waiting_confirmation" | "waiting_interval" | "waiting_candidates" | "paused" | "completed" | "blocked";
   mode: "direct_click";
   targetCount: number;
   intervalMinSeconds: number;
@@ -278,6 +278,7 @@ export type GreetingBatchState = {
   skipped: number;
   filteredOut: number;
   directGreeted: number;
+  candidateWaitRetries: number;
   candidates: GreetingBatchCandidate[];
   records: GreetingBatchRecord[];
 };

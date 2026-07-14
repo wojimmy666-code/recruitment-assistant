@@ -1,7 +1,7 @@
 const LOCAL_BASE_URL = "http://localhost:3000";
 const STORAGE_KEY = "recruitmentAssistantGreetingBatch";
 const ALARM_NAME = "recruitment-assistant-greeting-batch-next";
-const MAX_PROCESSED_FINGERPRINTS = 500;
+const MAX_PROCESSED_FINGERPRINTS = 2000;
 
 let activeStepPromise = null;
 let batchStartPromise = null;
@@ -174,7 +174,7 @@ async function resumeGreetingBatch() {
     throw new Error("\u5f53\u524d\u6279\u6b21\u5df2\u88ab\u98ce\u63a7\u963b\u65ad\uff0c\u8bf7\u5904\u7406 BOSS \u9875\u9762\u540e\u91cd\u65b0\u5f00\u59cb\u3002");
   }
 
-  if (currentBatch.status === "waiting_interval") {
+  if (currentBatch.status === "waiting_interval" || currentBatch.status === "waiting_candidates") {
     controller.active = true;
     controller.updatedAt = new Date().toISOString();
     await writeController(controller);
@@ -280,7 +280,7 @@ async function executeBatchStep() {
     controller.updatedAt = new Date().toISOString();
     await writeController(controller);
     await chrome.alarms.clear(ALARM_NAME);
-  } else if (nextBatch.status === "waiting_interval") {
+  } else if (nextBatch.status === "waiting_interval" || nextBatch.status === "waiting_candidates") {
     await scheduleFromBatch(nextBatch);
   } else if (nextBatch.status === "running") {
     chrome.alarms.create(ALARM_NAME, { when: Date.now() + 1000 });

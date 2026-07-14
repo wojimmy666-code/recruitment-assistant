@@ -8,6 +8,7 @@ type HeaderProps = {
 
 const batchLabels: Record<string, string> = {
   running: "运行中",
+  waiting_candidates: "\u7b49\u5f85\u5019\u9009\u4eba",
   waiting_interval: "等待间隔",
   paused: "已暂停",
   completed: "已完成",

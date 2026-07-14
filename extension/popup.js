@@ -593,6 +593,7 @@ function clampInteger(value, min, max, fallback) {
 
 function greetingBatchSnapshotText(batch) {
   if (batch?.status === "waiting_interval") return greetingBatchWaitText(batch, getBatchRemainingSeconds(batch));
+  if (batch?.status === "waiting_candidates") return greetingCandidateWaitText(batch, getBatchRemainingSeconds(batch));
   return batchDoneText(batch);
 }
 
@@ -603,6 +604,10 @@ function greetingBatchWaitText(batch, waitSeconds) {
   return `\u95f4\u9694\u4fdd\u62a4\u4e2d\uff0c\u8ddd\u79bb\u4e0b\u4e00\u4e2a\u8fd8\u9700\u7b49\u5f85 ${seconds} \u79d2${suffix}\u3002`;
 }
 
+function greetingCandidateWaitText(batch, waitSeconds) {
+  const seconds = Math.max(0, Number(waitSeconds || 0));
+  return "等待 BOSS 加载更多候选人，预计 " + seconds + " 秒后自动重试。";
+}
 function getBatchRemainingSeconds(batch) {
   if (!batch?.nextAllowedAt) return 0;
   return Math.max(0, Math.ceil((new Date(batch.nextAllowedAt).getTime() - Date.now()) / 1000));
@@ -926,6 +931,7 @@ function renderGreetingBatchResult(batch) {
 
 function batchStateLabel(status) {
   if (status === "running") return "运行中";
+  if (status === "waiting_candidates") return "\u7b49\u5f85\u5019\u9009\u4eba";
   if (status === "waiting_interval") return "等待间隔";
   if (status === "paused") return "已暂停";
   if (status === "completed") return "已完成";
@@ -935,6 +941,7 @@ function batchStateLabel(status) {
 
 function batchRecordStatusLabel(status) {
   if (status === "direct_greeted") return "已打招呼";
+  if (status === "waiting_candidates") return "\u7b49\u5f85\u65b0\u5019\u9009\u4eba";
   if (status === "exhausted") return "列表已遍历";
   if (status === "uncertain") return "结果待确认";
   if (status === "failed") return "失败";
@@ -1052,7 +1059,7 @@ function updateBatchActionButtons(batch) {
   const status = batch?.status || "idle";
   batchStartButton.hidden = !["idle", "completed", "blocked"].includes(status);
   batchContinueButton.hidden = status !== "paused";
-  batchPauseButton.hidden = !["running", "waiting_interval"].includes(status);
+  batchPauseButton.hidden = !["running", "waiting_interval", "waiting_candidates"].includes(status);
 
   batchStartButton.textContent = status === "completed" ? "开始新批次" : status === "blocked" ? "已阻断" : "开始批量打招呼";
   batchStartButton.disabled = status === "blocked";

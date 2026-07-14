@@ -199,8 +199,10 @@ code {
 .statusPill.connected,
 .batchBadge.running,
 .batchBadge.waiting_interval,
+.batchBadge.waiting_candidates,
 .statusPill.batch-running,
 .statusPill.batch-waiting_interval,
+.statusPill.batch-waiting_candidates,
 .candidateStatus.pending,
 .candidateStatus.direct_greeted {
   border-color: #b8dccf;

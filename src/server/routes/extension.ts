@@ -180,7 +180,7 @@ type ExtensionGreetingBatchCandidate = {
 
 type ExtensionGreetingBatchState = {
   id: string;
-  status: "running" | "waiting_confirmation" | "waiting_interval" | "paused" | "completed" | "blocked";
+  status: "running" | "waiting_confirmation" | "waiting_interval" | "waiting_candidates" | "paused" | "completed" | "blocked";
   mode: "direct_click";
   targetCount: number;
   intervalMinSeconds: number;
@@ -204,6 +204,7 @@ type ExtensionGreetingBatchState = {
   skipped: number;
   filteredOut: number;
   directGreeted: number;
+  candidateWaitRetries: number;
   candidates: ExtensionGreetingBatchCandidate[];
   records: ExtensionGreetingBatchRecord[];
 };
@@ -364,6 +365,7 @@ export function createExtensionRouter({ db }: { db: AppDatabase }) {
       skipped: 0,
       filteredOut: 0,
       directGreeted: 0,
+      candidateWaitRetries: 0,
       candidates: [],
       records: []
     };
@@ -386,6 +388,7 @@ export function createExtensionRouter({ db }: { db: AppDatabase }) {
     lastGreetingBatch.status = "running";
     lastGreetingBatch.pauseReason = "";
     lastGreetingBatch.nextAllowedAt = "";
+    lastGreetingBatch.candidateWaitRetries = 0;
     lastGreetingBatch.updatedAt = new Date().toISOString();
     emitGreetingBatch();
     res.json({ ok: true, batch: lastGreetingBatch });
@@ -458,6 +461,7 @@ function deriveDirectGreetingBatchStatus(actionResult: ExtensionGreetingActionRe
   if (actionResult.blockedReason || actionResult.outcome === "blocked") return "blocked";
   if (actionResult.outcome === "direct_greeted" && actionResult.directGreetingDetected) return "direct_greeted";
   if (actionResult.outcome === "exhausted") return "exhausted";
+  if (actionResult.outcome === "waiting_candidates") return "waiting_candidates";
   if (actionResult.outcome === "uncertain") return "uncertain";
   return "failed";
 }
@@ -465,6 +469,7 @@ function deriveDirectGreetingBatchStatus(actionResult: ExtensionGreetingActionRe
 function deriveDirectGreetingBatchMessage(status: string, actionResult: ExtensionGreetingActionResult) {
   if (status === "direct_greeted") return "";
   if (status === "blocked") return actionResult.blockedReason || actionResult.reason || "BOSS 页面已阻断批量动作。";
+  if (status === "waiting_candidates") return actionResult.reason || "\u7b49\u5f85 BOSS \u52a0\u8f7d\u66f4\u591a\u5019\u9009\u4eba\u3002";
   if (status === "exhausted") return actionResult.reason || "当前推荐列表没有更多未打招呼的候选人。";
   if (status === "uncertain") return actionResult.reason || "打招呼结果无法确认，已暂停。";
   return actionResult.reason || "未完成打招呼。";
@@ -579,6 +584,7 @@ function applyGreetingBatchRecord(record: ExtensionGreetingBatchRecord) {
 
   if (record.status === "direct_greeted") {
     lastGreetingBatch.directGreeted += 1;
+    lastGreetingBatch.candidateWaitRetries = 0;
     if (completedGreetingCount(lastGreetingBatch) >= lastGreetingBatch.targetCount) {
       lastGreetingBatch.status = "completed";
       lastGreetingBatch.pauseReason = "";
@@ -592,11 +598,24 @@ function applyGreetingBatchRecord(record: ExtensionGreetingBatchRecord) {
     return;
   }
 
+  if (record.status === "waiting_candidates") {
+    lastGreetingBatch.candidateWaitRetries = (lastGreetingBatch.candidateWaitRetries || 0) + 1;
+    if (lastGreetingBatch.candidateWaitRetries >= 6) {
+      lastGreetingBatch.status = "paused";
+      lastGreetingBatch.pauseReason = "连续 6 次未加载到新候选人，已暂停。请确认 BOSS 页面仍有更多推荐后点击恢复。";
+      lastGreetingBatch.nextAllowedAt = "";
+      return;
+    }
+
+    lastGreetingBatch.status = "waiting_candidates";
+    lastGreetingBatch.pauseReason = record.errorMessage || "正在等待 BOSS 加载更多候选人。";
+    lastGreetingBatch.nextAllowedAt = nextCandidateRetryAt();
+    return;
+  }
+
   if (record.status === "exhausted") {
-    lastGreetingBatch.status = "completed";
-    lastGreetingBatch.pauseReason = completedGreetingCount(lastGreetingBatch) >= lastGreetingBatch.targetCount
-      ? ""
-      : record.errorMessage || "推荐列表已遍历完，未达到目标数量。";
+    lastGreetingBatch.status = "paused";
+    lastGreetingBatch.pauseReason = record.errorMessage || "当前 BOSS 推荐列表已到底，但未达到目标数量。";
     lastGreetingBatch.nextAllowedAt = "";
     return;
   }
@@ -623,6 +642,10 @@ function nextBatchAllowedAt(minSeconds: number, maxSeconds: number) {
   return new Date(Date.now() + seconds * 1000).toISOString();
 }
 
+function nextCandidateRetryAt() {
+  const seconds = 8 + Math.floor(Math.random() * 8);
+  return new Date(Date.now() + seconds * 1000).toISOString();
+}
 function clampNumber(value: unknown, min: number, max: number, fallback: number) {
   const parsed = Number(value);
   const number = Number.isFinite(parsed) ? parsed : fallback;

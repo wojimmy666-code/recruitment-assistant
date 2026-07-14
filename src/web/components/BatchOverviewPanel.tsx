@@ -7,6 +7,7 @@ type Props = {
 
 const statusLabels: Record<string, string> = {
   running: "运行中",
+  waiting_candidates: "\u7b49\u5f85\u5019\u9009\u4eba",
   waiting_interval: "等待间隔",
   paused: "已暂停",
   completed: "已完成",
@@ -97,6 +98,7 @@ export function BatchOverviewPanel({ batch }: Props) {
 
 function recordLabel(status: string) {
   if (status === "direct_greeted") return "已打招呼";
+  if (status === "waiting_candidates") return "\u7b49\u5f85 BOSS \u52a0\u8f7d\u66f4\u591a\u5019\u9009\u4eba";
   if (status === "exhausted") return "列表已遍历";
   if (status === "uncertain") return "结果待确认";
   if (status === "blocked") return "已阻断";

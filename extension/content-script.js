@@ -1,5 +1,8 @@
 let recommendBatchStepInFlight = false;
 const RECOMMEND_PERSON_CARD_SELECTOR = ".geek-card-small.candidate-card-wrap, .candidate-card-wrap";
+const RECOMMEND_SCAN_MAX_PASSES = 20;
+const RECOMMEND_STALLED_LOAD_LIMIT = 3;
+const RECOMMEND_LIST_LOAD_TIMEOUT_MS = 4500;
 
 if (!globalThis.__recruitmentAssistantBridgeLoaded) {
   globalThis.__recruitmentAssistantBridgeLoaded = true;
@@ -2006,11 +2009,10 @@ async function processNextRecommendBatchCard(options = {}) {
     const skippedItems = [];
     const filteredItems = [];
     const observedItems = [];
-    let previousSignature = "";
-    let unchangedScrolls = 0;
+    let stalledLoads = 0;
     let scrollAttempts = 0;
 
-    for (let pass = 0; pass <= 4; pass += 1) {
+    for (let pass = 0; pass < RECOMMEND_SCAN_MAX_PASSES; pass += 1) {
       const cards = currentRecommendBatchCards();
       const visibleItems = cards.map((card, index) => recommendBatchItemFromCard(card, index));
       for (const visibleItem of visibleItems) upsertObservedRecommendBatchItem(observedItems, visibleItem);
@@ -2147,25 +2149,34 @@ async function processNextRecommendBatchCard(options = {}) {
         });
       }
 
-      if (pass === 4) break;
+      if (pass === RECOMMEND_SCAN_MAX_PASSES - 1) break;
       const signatureBeforeScroll = recommendBatchCardSignature();
-      const scrollResult = scrollRecommendListForward();
-      if (!scrollResult.moved) break;
+      scrollRecommendListForward();
       scrollAttempts += 1;
-      await waitForUiSettle(1600 + Math.floor(Math.random() * 900));
-      const signatureAfterScroll = recommendBatchCardSignature();
-      if (signatureAfterScroll === signatureBeforeScroll || signatureAfterScroll === previousSignature) {
-        unchangedScrolls += 1;
-      } else {
-        unchangedScrolls = 0;
+      const loadResult = await waitForRecommendListUpdate(signatureBeforeScroll, RECOMMEND_LIST_LOAD_TIMEOUT_MS);
+      if (loadResult.endReason) {
+        return recommendBatchResultBase({
+          outcome: "exhausted",
+          reason: loadResult.endReason,
+          scannedFingerprints,
+          skippedItems,
+          filteredItems,
+          observedItems,
+          scrollAttempts
+        });
       }
-      previousSignature = signatureAfterScroll;
-      if (unchangedScrolls >= 2) break;
+      if (loadResult.changed) {
+        stalledLoads = 0;
+        continue;
+      }
+      stalledLoads += 1;
+      if (stalledLoads >= RECOMMEND_STALLED_LOAD_LIMIT) break;
     }
 
+    const endReason = detectRecommendListEndReason();
     return recommendBatchResultBase({
-      outcome: "exhausted",
-      reason: "当前推荐列表没有更多符合条件且未打招呼的候选人。",
+      outcome: endReason ? "exhausted" : "waiting_candidates",
+      reason: endReason || "当前扫描范围暂时没有新候选人，将等待 BOSS 加载后自动重试。",
       scannedFingerprints,
       skippedItems,
       filteredItems,
@@ -2679,6 +2690,40 @@ function recommendBatchCardSignature() {
     })
     .join("||")
     .slice(0, 4000);
+}
+async function waitForRecommendListUpdate(previousSignature, timeoutMs) {
+  const startedAt = Date.now();
+  const previousCount = currentRecommendBatchCards().length;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    await waitForUiSettle(500);
+    const endReason = detectRecommendListEndReason();
+    if (endReason) return { changed: false, endReason };
+
+    const cards = currentRecommendBatchCards();
+    const signature = recommendBatchCardSignature();
+    if (cards.length > previousCount || (signature && signature !== previousSignature)) {
+      return { changed: true, endReason: "" };
+    }
+  }
+
+  return { changed: false, endReason: detectRecommendListEndReason() };
+}
+
+function detectRecommendListEndReason() {
+  const text = normalizeText(document.body?.innerText || "");
+  const markers = [
+    "没有更多了",
+    "暂无更多",
+    "没有更多牛人",
+    "暂时没有更多",
+    "已看完全部",
+    "已经到底了"
+  ];
+  const marker = markers.find((item) => text.includes(item));
+  return marker
+    ? "BOSS 页面显示“" + marker + "”，当前推荐列表已到底。"
+    : "";
 }
 async function clickSingleGreetingFromRecommendQueue(candidate) {
   if (!location.href.includes("zhipin.com")) {
