@@ -4,7 +4,7 @@
 一、启动服务器
 1. 解压整个目录，不要只复制其中部分文件。
 2. 双击 start-server.bat。
-3. 等待浏览器自动打开 http://localhost:3000。
+3. 等待浏览器自动打开 http://localhost:3218。
 4. 如需停止服务器，双击 stop-server.bat。
 
 二、安装 Chrome 扩展
@@ -26,7 +26,7 @@
 不要复制 app.sqlite-wal 或 app.sqlite-shm 临时文件。
 
 五、故障排查
-- 端口被占用：关闭占用 3000 端口的程序后重试。
+- 端口被占用：关闭占用 3218 端口的程序后重试。
 - 页面无法打开：查看 logs\server.error.log。
 - 扩展无法连接：确认服务器已启动，并重新加载 Chrome 扩展。
 - Windows 安全提示：确认文件来源后允许本地 Node.js 程序运行。

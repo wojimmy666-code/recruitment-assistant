@@ -11,8 +11,8 @@ $logsPath = Join-Path $root "logs"
 $pidPath = Join-Path $logsPath "server.pid"
 $stdoutPath = Join-Path $logsPath "server.out.log"
 $stderrPath = Join-Path $logsPath "server.error.log"
-$healthUrl = "http://127.0.0.1:3000/api/health"
-$appUrl = "http://localhost:3000"
+$healthUrl = "http://127.0.0.1:3218/api/health"
+$appUrl = "http://localhost:3218"
 
 if (-not (Test-Path -LiteralPath $nodePath)) {
   throw "Portable Node.js runtime is missing: $nodePath"
@@ -33,8 +33,8 @@ try {
 } catch {
 }
 
-if (Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue) {
-  throw "Port 3000 is already in use by another program."
+if (Get-NetTCPConnection -LocalPort 3218 -State Listen -ErrorAction SilentlyContinue) {
+  throw "Port 3218 is already in use by another program."
 }
 
 if (Test-Path -LiteralPath $pidPath) {
@@ -48,7 +48,7 @@ $oldDataDir = $env:APP_DATA_DIR
 $oldJournalMode = $env:DB_JOURNAL_MODE
 $env:NODE_ENV = "production"
 $env:HOST = "127.0.0.1"
-$env:PORT = "3000"
+$env:PORT = "3218"
 $env:APP_DATA_DIR = $dataPath
 $env:DB_JOURNAL_MODE = "DELETE"
 

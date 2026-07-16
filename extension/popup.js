@@ -1,4 +1,4 @@
-const localBaseUrl = "http://localhost:3000";
+const localBaseUrl = "http://localhost:3218";
 const batchPreferencesStorageKey = "recruitmentAssistantBatchPreferences";
 const defaultBatchPreferences = Object.freeze({
   targetCount: 3,
@@ -476,10 +476,29 @@ async function runGreetingBatchStep({ startNew }) {
     statusEl.textContent = greetingBatchSnapshotText(batch);
     renderGreetingBatchResult(batch);
   } catch (error) {
-    statusEl.textContent = error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
+    statusEl.textContent = message;
+    renderGreetingBatchOperationError(message);
   } finally {
     setBusy(false);
   }
+}
+
+function renderGreetingBatchOperationError(message) {
+  resultEl.hidden = false;
+  resultEl.replaceChildren();
+
+  const summary = document.createElement("p");
+  summary.textContent = "本次批量操作失败";
+  resultEl.append(summary);
+
+  const reason = document.createElement("code");
+  reason.textContent = message;
+  resultEl.append(reason);
+
+  const meta = document.createElement("code");
+  meta.textContent = `扩展 v${chrome.runtime.getManifest().version} · ${new Date().toLocaleString()}`;
+  resultEl.append(meta);
 }
 
 async function pauseGreetingBatch() {
@@ -942,6 +961,7 @@ function batchStateLabel(status) {
 function batchRecordStatusLabel(status) {
   if (status === "direct_greeted") return "已打招呼";
   if (status === "waiting_candidates") return "\u7b49\u5f85\u65b0\u5019\u9009\u4eba";
+  if (status === "filter_failed") return "筛选失败";
   if (status === "exhausted") return "列表已遍历";
   if (status === "uncertain") return "结果待确认";
   if (status === "failed") return "失败";
@@ -959,6 +979,10 @@ function appendDirectGreetingDiagnostics(record) {
   }
   if (action.greetingButtonSelector) lines.push("clicked selector: " + action.greetingButtonSelector);
   if (action.scrollAttempts) lines.push("scroll: " + action.scrollAttempts);
+  if (action.batchAdvanceAction) {
+    lines.push("batch advance: " + action.batchAdvanceAction + (action.batchAdvanceText ? " · " + action.batchAdvanceText : ""));
+  }
+  if (action.batchAdvanceReason) lines.push("batch result: " + action.batchAdvanceReason);
   for (const line of lines) {
     const row = document.createElement("code");
     row.textContent = line;

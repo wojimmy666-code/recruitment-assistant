@@ -1,7 +1,9 @@
-const LOCAL_BASE_URL = "http://localhost:3000";
+const LOCAL_BASE_URL = "http://localhost:3218";
 const STORAGE_KEY = "recruitmentAssistantGreetingBatch";
 const ALARM_NAME = "recruitment-assistant-greeting-batch-next";
 const MAX_PROCESSED_FINGERPRINTS = 2000;
+const RECOMMEND_FRAME_RELOAD_TIMEOUT_MS = 20000;
+const RECOMMEND_FRAME_READY_POLL_MS = 750;
 
 let activeStepPromise = null;
 let batchStartPromise = null;
@@ -141,12 +143,21 @@ async function applySavedFiltersToRecommendPage(tabId, job) {
     throw new Error("未找到 BOSS 推荐列表 frame，请刷新推荐页后重试。");
   }
 
+  await injectCurrentContentScript(tabId, frame.frameId);
   const result = await sendMessageToFrame(tabId, frame.frameId, {
     type: "RECOMMEND_APPLY_FILTERS",
     job
   });
+  const expectedVersion = chrome.runtime.getManifest().version;
+  if (result?.extensionVersion !== expectedVersion) {
+    throw new Error(
+      `BOSS 标签页内容脚本版本不一致：期望 v${expectedVersion}，实际 ${result?.extensionVersion ? "v" + result.extensionVersion : "未知版本"}。请刷新 BOSS 页面后重试。`
+    );
+  }
   if (!result?.ok || !result?.applied || !result?.refreshed) {
-    throw new Error("BOSS 筛选未完成，已停止批量：" + (result?.reason || "页面没有确认筛选结果已刷新。"));
+    await reportFilterFailureDiagnostics(tabId, frame, result);
+    const version = result.extensionVersion;
+    throw new Error(`BOSS 筛选未完成，已停止批量：[扩展 v${version}] ${result?.reason || "页面没有确认筛选结果已刷新。"}`);
   }
 
   return {
@@ -182,6 +193,9 @@ async function resumeGreetingBatch() {
     return { ok: true, waiting: true, controller, batch: currentBatch };
   }
 
+  // Resuming the same batch must not reopen BOSS filters. The batch could only
+  // start after a confirmed filter application, and every card is still
+  // validated locally before clicking.
   const payload = currentBatch.status === "paused"
     ? await localRequest("/api/extension/greeting-batch/resume", { method: "POST", body: {} })
     : { batch: currentBatch };
@@ -273,7 +287,31 @@ async function executeBatchStep() {
       actionResult: result
     }
   });
-  const nextBatch = recordPayload.batch;
+  let nextBatch = recordPayload.batch;
+
+  if (!stoppedDuringStep
+    && nextBatch.status === "paused"
+    && result.outcome === "uncertain"
+    && result.clicked
+    && !result.blockedReason) {
+    controller.consecutiveUncertain = Number(controller.consecutiveUncertain || 0) + 1;
+    if (controller.consecutiveUncertain <= 3) {
+      const resumedPayload = await localRequest("/api/extension/greeting-batch/resume", {
+        method: "POST",
+        body: {}
+      });
+      nextBatch = resumedPayload.batch;
+      controller.active = true;
+      controller.updatedAt = new Date().toISOString();
+      controller.lastError = "";
+      await writeController(controller);
+      chrome.alarms.create(ALARM_NAME, { when: Date.now() + randomBatchDelayMs(nextBatch) });
+      return { ok: true, result, batch: nextBatch };
+    }
+  } else if (result.outcome === "direct_greeted") {
+    controller.consecutiveUncertain = 0;
+    await writeController(controller);
+  }
 
   if (stoppedDuringStep) {
     controller.active = false;
@@ -306,13 +344,16 @@ async function executeRecommendPageStep(controller) {
     throw new Error("\u672a\u627e\u5230 BOSS \u63a8\u8350\u5217\u8868 frame\uff0c\u8bf7\u5237\u65b0\u63a8\u8350\u9875\u540e\u6062\u590d\u3002");
   }
 
-  const result = await sendMessageToFrame(controller.tabId, frame.frameId, {
+  let result = await sendMessageToFrame(controller.tabId, frame.frameId, {
     type: "RECOMMEND_BATCH_STEP",
     resetToTop: Boolean(controller.resetToTop),
     job: controller.job || {},
     localFilterFields: controller.localFilterFields || [],
     processedFingerprints: controller.processedFingerprints || []
   });
+  if (result?.outcome === "recommend_refresh_required") {
+    result = await reloadRecommendBatchAndRetry(controller, frame, result);
+  }
   if (!result?.ok && !result?.outcome) {
     throw new Error(result?.reason || "\u63a8\u8350\u9875\u6ca1\u6709\u8fd4\u56de\u6709\u6548\u7684\u6279\u5904\u7406\u7ed3\u679c\u3002");
   }
@@ -323,6 +364,121 @@ async function executeRecommendPageStep(controller) {
     frameUrl: frame.url || "",
     framePath: pathFromUrl(frame.url)
   };
+}
+
+async function reloadRecommendBatchAndRetry(controller, frame, previousResult) {
+  const processedFingerprints = Array.from(new Set([
+    ...(controller.processedFingerprints || []),
+    ...(previousResult.scannedFingerprints || []),
+    previousResult.item?.fingerprint || ""
+  ].filter(Boolean)));
+
+  await chrome.scripting.executeScript({
+    target: { tabId: controller.tabId, frameIds: [frame.frameId] },
+    func: () => window.location.reload()
+  });
+  await waitMilliseconds(800);
+  let refreshedFrame = await waitForRecommendFrameReady(controller.tabId, frame.documentId || "");
+  const refreshedProbe = await sendMessageToFrame(controller.tabId, refreshedFrame.frameId, {
+    type: "RECOMMEND_BATCH_PROBE"
+  });
+
+  if (!refreshedProbe?.filterStatePreserved) {
+    const filterResult = await applySavedFiltersToRecommendPage(controller.tabId, controller.job || {});
+    controller.localFilterFields = filterResult.localFilterFields || controller.localFilterFields || [];
+    refreshedFrame = await waitForRecommendFrameReady(controller.tabId);
+  }
+  const retryResult = await sendMessageToFrame(controller.tabId, refreshedFrame.frameId, {
+    type: "RECOMMEND_BATCH_STEP",
+    resetToTop: true,
+    batchAdvanceAttempted: true,
+    batchAdvanceAction: "frame_reload",
+    batchAdvanceChanged: false,
+    batchAdvanceReason: "已重新加载推荐列表并重新应用筛选条件。",
+    job: controller.job || {},
+    localFilterFields: controller.localFilterFields || [],
+    processedFingerprints
+  });
+  if (!retryResult?.ok && !retryResult?.outcome) {
+    throw new Error(retryResult?.reason || "重新加载推荐列表后没有返回有效的批处理结果。");
+  }
+
+  const freshCandidateDetected = (retryResult.observedItems || [])
+    .some((item) => item?.fingerprint && !processedFingerprints.includes(item.fingerprint));
+  const batchAdvanceReason = freshCandidateDetected
+    ? "已重新加载推荐列表、恢复筛选条件并识别到新候选人。"
+    : "已重新加载推荐列表并恢复筛选条件，但没有识别到未处理的新候选人。";
+
+  return mergeRecommendStepResults(previousResult, retryResult, {
+    batchAdvanceAction: "frame_reload",
+    batchAdvanceText: "重新加载推荐列表",
+    batchAdvanceSelector: "",
+    batchAdvanceChanged: freshCandidateDetected,
+    batchAdvanceReason
+  });
+}
+
+async function waitForRecommendFrameReady(tabId, previousDocumentId = "") {
+  const deadline = Date.now() + RECOMMEND_FRAME_RELOAD_TIMEOUT_MS;
+  let lastReason = "";
+  while (Date.now() < deadline) {
+    const frame = await getRecommendFrame(tabId);
+    if (frame) {
+      if (previousDocumentId && frame.documentId === previousDocumentId) {
+        lastReason = "推荐 frame 尚未完成重新加载";
+        await waitMilliseconds(RECOMMEND_FRAME_READY_POLL_MS);
+        continue;
+      }
+      try {
+        const probe = await sendMessageToFrame(tabId, frame.frameId, { type: "RECOMMEND_BATCH_PROBE" });
+        if (probe?.ok && probe.ready && probe.candidateListReady && probe.filterTriggerReady) return frame;
+        const pending = [];
+        if (!probe?.ready) pending.push("frame");
+        if (!probe?.candidateListReady) pending.push("候选列表");
+        if (!probe?.filterTriggerReady) pending.push("筛选入口");
+        lastReason = pending.length > 0 ? pending.join("、") + "尚未就绪" : "推荐 frame 仍在加载";
+      } catch (error) {
+        lastReason = errorMessage(error);
+      }
+    } else {
+      lastReason = "尚未找到推荐列表 frame";
+    }
+    await waitMilliseconds(RECOMMEND_FRAME_READY_POLL_MS);
+  }
+  throw new Error(`重新加载 BOSS 推荐列表超时：${lastReason || "页面未就绪"}。`);
+}
+
+function mergeRecommendStepResults(previousResult, retryResult, advanceDetails) {
+  return {
+    ...previousResult,
+    ...retryResult,
+    observedItems: mergeRecommendItems(previousResult.observedItems, retryResult.observedItems, 100),
+    skippedItems: mergeRecommendItems(previousResult.skippedItems, retryResult.skippedItems, 40),
+    filteredItems: mergeRecommendItems(previousResult.filteredItems, retryResult.filteredItems, 100),
+    scannedFingerprints: Array.from(new Set([
+      ...(previousResult.scannedFingerprints || []),
+      ...(retryResult.scannedFingerprints || [])
+    ])).filter(Boolean).slice(-200),
+    scrollAttempts: Number(previousResult.scrollAttempts || 0) + Number(retryResult.scrollAttempts || 0),
+    ...advanceDetails
+  };
+}
+
+function mergeRecommendItems(first, second, limit) {
+  const items = [];
+  const seen = new Set();
+  for (const item of [...(first || []), ...(second || [])]) {
+    const key = item?.fingerprint || item?.externalKey || item?.profileUrl || item?.id;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    items.push(item);
+    if (items.length >= limit) break;
+  }
+  return items;
+}
+
+function waitMilliseconds(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 async function getRecommendFrame(tabId) {
@@ -336,11 +492,41 @@ async function sendMessageToFrame(tabId, frameId, message) {
   try {
     return await chrome.tabs.sendMessage(tabId, message, { frameId });
   } catch (_error) {
-    await chrome.scripting.executeScript({
-      target: { tabId, frameIds: [frameId] },
-      files: ["content-script.js"]
-    });
+    await injectCurrentContentScript(tabId, frameId);
     return chrome.tabs.sendMessage(tabId, message, { frameId });
+  }
+}
+
+async function injectCurrentContentScript(tabId, frameId) {
+  await chrome.scripting.executeScript({
+    target: { tabId, frameIds: [frameId] },
+    files: ["content-script.js"]
+  });
+}
+
+async function reportFilterFailureDiagnostics(tabId, frame, result) {
+  const diagnostics = result?.filterDiagnostics;
+  if (!diagnostics || typeof diagnostics !== "object") return;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    await localRequest("/api/extension/filter-diagnostics", {
+      method: "POST",
+      body: {
+        sourceUrl: frame.url || result.href || tab.url || "",
+        title: tab.title || result.title || "",
+        frames: [{
+          ...diagnostics,
+          ok: true,
+          reason: result.reason || diagnostics.reason || "",
+          frameId: String(frame.frameId),
+          frameUrl: frame.url || result.href || "",
+          framePath: pathFromUrl(frame.url || result.href || ""),
+          capturedAt: new Date().toISOString()
+        }]
+      }
+    });
+  } catch (_error) {
+    // Diagnostics must never hide the original filter failure.
   }
 }
 
@@ -363,7 +549,12 @@ async function pauseControllerForError(reason) {
   try {
     await localRequest("/api/extension/greeting-batch/pause", {
       method: "POST",
-      body: { reason }
+      body: {
+        reason,
+        kind: reason.startsWith("BOSS 筛选未完成") || reason.includes("内容脚本版本不一致")
+          ? "filter_failure"
+          : "runtime_failure"
+      }
     });
   } catch (_error) {
     // The local service may be the source of the failure.
@@ -378,7 +569,7 @@ async function pauseIfTargetTabClosed(tabId) {
 
 async function restoreBatchSchedule() {
   const controller = await readController();
-  if (!controller?.active) return;
+  if (!controller?.batchId || !controller?.tabId) return;
 
   const batch = await readBatchSnapshot();
   if (!batch || batch.status === "completed" || batch.status === "blocked" || batch.status === "paused") {
@@ -386,6 +577,11 @@ async function restoreBatchSchedule() {
     await writeController(controller);
     return;
   }
+
+  controller.active = true;
+  controller.updatedAt = new Date().toISOString();
+  controller.lastError = "";
+  await writeController(controller);
 
   if (millisecondsUntil(batch.nextAllowedAt) > 0) {
     await scheduleFromBatch(batch);
@@ -417,6 +613,12 @@ function millisecondsUntil(value) {
   if (!value) return 0;
   const time = new Date(value).getTime();
   return Number.isFinite(time) ? Math.max(0, time - Date.now()) : 0;
+}
+
+function randomBatchDelayMs(batch) {
+  const minSeconds = Math.max(30, Number(batch?.intervalMinSeconds) || 30);
+  const maxSeconds = Math.max(minSeconds, Number(batch?.intervalMaxSeconds) || minSeconds);
+  return (minSeconds + Math.floor(Math.random() * (maxSeconds - minSeconds + 1))) * 1000;
 }
 
 async function readController() {

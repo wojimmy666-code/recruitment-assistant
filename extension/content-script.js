@@ -3,10 +3,16 @@ const RECOMMEND_PERSON_CARD_SELECTOR = ".geek-card-small.candidate-card-wrap, .c
 const RECOMMEND_SCAN_MAX_PASSES = 20;
 const RECOMMEND_STALLED_LOAD_LIMIT = 3;
 const RECOMMEND_LIST_LOAD_TIMEOUT_MS = 4500;
+const RECOMMEND_BATCH_ADVANCE_TIMEOUT_MS = 9000;
+const RECOMMEND_GREETING_CONFIRM_TIMEOUT_MS = 15000;
+const RECRUITMENT_ASSISTANT_EXTENSION_VERSION = chrome.runtime.getManifest().version;
 
-if (!globalThis.__recruitmentAssistantBridgeLoaded) {
-  globalThis.__recruitmentAssistantBridgeLoaded = true;
-  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+if (globalThis.__recruitmentAssistantBridgeVersion !== RECRUITMENT_ASSISTANT_EXTENSION_VERSION) {
+  if (typeof globalThis.__recruitmentAssistantBridgeListener === "function") {
+    chrome.runtime.onMessage.removeListener(globalThis.__recruitmentAssistantBridgeListener);
+  }
+  globalThis.__recruitmentAssistantBridgeVersion = RECRUITMENT_ASSISTANT_EXTENSION_VERSION;
+  const bridgeListener = (message, _sender, sendResponse) => {
     if (message?.type === "COLLECT_CANDIDATES") {
       try {
         const candidates = collectCandidatesFromPage();
@@ -31,6 +37,28 @@ if (!globalThis.__recruitmentAssistantBridgeLoaded) {
       return true;
     }
 
+    if (message?.type === "RECOMMEND_BATCH_PROBE") {
+      const cards = currentRecommendBatchCards();
+      const listContainers = findCandidateListContainers();
+      const filterState = readRecommendFilterState();
+      sendResponse({
+        ok: true,
+        extensionVersion: RECRUITMENT_ASSISTANT_EXTENSION_VERSION,
+        ready: document.readyState !== "loading",
+        cardCount: cards.length,
+        candidateListReady: listContainers.length > 0 || findRecommendQueueFallbackContainers().length > 0,
+        filterTriggerReady: Boolean(findRecommendFilterTrigger()),
+        filterText: filterState.text,
+        filterActive: filterState.active,
+        filterCount: filterState.count,
+        filterStatePreserved: filterState.preserved,
+        signature: recommendBatchCardSignature(),
+        href: location.href,
+        path: location.pathname
+      });
+      return true;
+    }
+
     if (message?.type === "RECOMMEND_APPLY_FILTERS") {
       void applyRecruitmentFilters(message.job || {})
         .then((result) => sendResponse(result))
@@ -38,6 +66,7 @@ if (!globalThis.__recruitmentAssistantBridgeLoaded) {
           ok: false,
           applied: false,
           refreshed: false,
+          extensionVersion: RECRUITMENT_ASSISTANT_EXTENSION_VERSION,
           reason: error instanceof Error ? error.message : String(error),
           href: location.href,
           path: location.pathname
@@ -46,7 +75,9 @@ if (!globalThis.__recruitmentAssistantBridgeLoaded) {
     }
 
     return false;
-  });
+  };
+  globalThis.__recruitmentAssistantBridgeListener = bridgeListener;
+  chrome.runtime.onMessage.addListener(bridgeListener);
 }
 function collectCandidatesFromPage() {
   if (!location.href.includes("zhipin.com")) {
@@ -762,10 +793,38 @@ async function applyRecruitmentFilters(job) {
     softWarnings.push(`当前 BOSS 职位为 ${selectedJobText}，仅作为本批次打招呼上下文；候选条件仍按招聘助手设置执行。`);
   }
 
-  clickFirstByText(/筛选|过滤|条件|更多条件|基础要求|个性化要求/);
-  await waitForUiSettle(500);
+  const filterDialogOpened = recommendFrame
+    ? await openBossFilterDialogWithRetry()
+    : clickFirstByText(/筛选|过滤|条件|更多条件|基础要求|个性化要求/);
+  if (recommendFrame && !filterDialogOpened) {
+    return buildFilterFailureResult({
+      ok: false,
+      applied: false,
+      refreshed: false,
+      reason: "BOSS 推荐页已加载，但筛选弹层未就绪；已重试 3 次并停止，未执行后续打招呼。",
+      path: location.pathname,
+      before,
+      after: getCandidateListFingerprint(),
+      fields,
+      warnings
+    });
+  }
+  await waitForUiSettle(300);
   if (await dismissPreviousFilterPrompt()) {
     softWarnings.push("已取消套用 BOSS 上次筛选条件，改用招聘助手当前条件。");
+    if (recommendFrame && !await openBossFilterDialogWithRetry()) {
+      return buildFilterFailureResult({
+        ok: false,
+        applied: false,
+        refreshed: false,
+        reason: "取消 BOSS 上次筛选条件后，筛选弹层没有恢复；已停止且未执行后续打招呼。",
+        path: location.pathname,
+        before,
+        after: getCandidateListFingerprint(),
+        fields,
+        warnings: warnings.concat(softWarnings)
+      });
+    }
   }
 
   if (keyword) {
@@ -890,7 +949,7 @@ async function applyRecruitmentFilters(job) {
   }
 
   if (fields.length === 0) {
-    return {
+    return buildFilterFailureResult({
       ok: false,
       applied: false,
       reason: warnings.length ? warnings.join("；") : "未找到可填写或可确认的筛选条件",
@@ -899,11 +958,11 @@ async function applyRecruitmentFilters(job) {
       after: getCandidateListFingerprint(),
       fields,
       warnings: warnings.concat(softWarnings)
-    };
+    });
   }
 
   if (warnings.length > 0) {
-    return {
+    return buildFilterFailureResult({
       ok: false,
       applied: false,
       reason: `已确认 ${fields.join("、")}，但还有条件未成功确认：${warnings.join("；")}，已停止采集。`,
@@ -912,7 +971,7 @@ async function applyRecruitmentFilters(job) {
       after: getCandidateListFingerprint(),
       fields,
       warnings: warnings.concat(softWarnings)
-    };
+    });
   }
 
   let after = await waitForListFingerprintChange(before, 1200);
@@ -928,7 +987,7 @@ async function applyRecruitmentFilters(job) {
       return buildApplySuccess({ fields, localFilterFields, selectedJobText, submitted: "already-current", warnings: softWarnings, before, after: getCandidateListFingerprint() });
     }
 
-    return {
+    return buildFilterFailureResult({
       ok: false,
       applied: false,
       reason: `已确认 ${fields.join("、")}，但没有找到可点击的确认/搜索/筛选按钮，已停止采集。`,
@@ -937,7 +996,7 @@ async function applyRecruitmentFilters(job) {
       after: getCandidateListFingerprint(),
       fields,
       warnings: warnings.concat(softWarnings)
-    };
+    });
   }
 
   after = await waitForListFingerprintChange(before, 6500);
@@ -946,7 +1005,7 @@ async function applyRecruitmentFilters(job) {
       return buildApplySuccess({ fields, localFilterFields, selectedJobText, submitted: "already-current", warnings: softWarnings, before, after: after.fingerprint });
     }
 
-    return {
+    return buildFilterFailureResult({
       ok: false,
       applied: false,
       reason: `已提交 ${fields.join("、")}，但候选列表没有刷新，已停止采集。请校准 BOSS 筛选按钮或结果列表容器 selector。`,
@@ -955,16 +1014,36 @@ async function applyRecruitmentFilters(job) {
       after: after.fingerprint,
       fields,
       warnings: warnings.concat(softWarnings)
-    };
+    });
   }
 
   return buildApplySuccess({ fields, localFilterFields, selectedJobText, submitted, warnings: softWarnings, before, after: after.fingerprint });
+}
+
+function buildFilterFailureResult(values) {
+  const diagnostics = collectFilterControlDiagnostics();
+  return {
+    ...values,
+    refreshed: false,
+    extensionVersion: RECRUITMENT_ASSISTANT_EXTENSION_VERSION,
+    filterDiagnostics: {
+      ...diagnostics,
+      ok: true,
+      reason: values.reason || "",
+      textHints: [
+        `扩展版本 ${RECRUITMENT_ASSISTANT_EXTENSION_VERSION}`,
+        `筛选失败：${truncateDiagnosticText(values.reason || "", 80)}`,
+        ...(diagnostics.textHints || [])
+      ].slice(0, 80)
+    }
+  };
 }
 
 function buildApplySuccess({ fields, localFilterFields, selectedJobText, submitted, warnings, before, after }) {
   return {
     ok: true,
     applied: true,
+    extensionVersion: RECRUITMENT_ASSISTANT_EXTENSION_VERSION,
     fields,
     localFilterFields,
     selectedJobText,
@@ -1049,6 +1128,66 @@ function findBossFilterDialog() {
     }
   }
   return null;
+}
+
+async function openBossFilterDialogWithRetry() {
+  if (findBossFilterDialog()) return true;
+
+  const attempted = new Set();
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const trigger = findRecommendFilterTriggers()
+      .find((element) => !attempted.has(element));
+    if (trigger) {
+      attempted.add(trigger);
+      clickElement(resolveRecommendFilterClickTarget(trigger));
+    }
+    await waitForUiSettle(550 + attempt * 350);
+    if (findBossFilterDialog()) return true;
+  }
+  return false;
+}
+
+function findRecommendFilterTrigger() {
+  return findRecommendFilterTriggers()[0] || null;
+}
+
+function readRecommendFilterState() {
+  const trigger = findRecommendFilterTrigger();
+  if (!trigger) return { text: "", active: false, count: 0, preserved: false };
+
+  const text = normalizeText(textFromClickable(trigger));
+  const countMatch = text.match(/(\d+)/);
+  const count = countMatch ? Number(countMatch[1]) : 0;
+  const active = count > 0 || Boolean(trigger.closest(".active, [aria-expanded='true']"));
+  return { text, active, count, preserved: active && count > 0 };
+}
+
+function findRecommendFilterTriggers() {
+  const exactLabels = new Set(["筛选", "更多筛选", "筛选条件"]);
+  const candidates = visibleControlElements(
+    "button, a, [role='button'], .recommend-filter, .op-filter, .filter-wrap, .filter-label-wrap, .filter-label"
+  )
+    .filter((element) => !element.closest(RECOMMEND_PERSON_CARD_SELECTOR))
+    .filter((element) => exactLabels.has(normalizeText(textFromClickable(element))))
+    .map((element) => {
+      const className = String(element.className || "");
+      const score = (element.matches("button, a, [role='button']") ? 120 : 0)
+        + (/(^|\s)filter-label(\s|$)/.test(className) ? 100 : 0)
+        + (/filter-label-wrap/.test(className) ? 90 : 0)
+        + (/(^|\s)filter-wrap(\s|$)/.test(className) ? 80 : 0)
+        + (/recommend-filter|op-filter/.test(className) ? 70 : 0);
+      return { element, score };
+    })
+    .sort((a, b) => b.score - a.score || elementArea(a.element) - elementArea(b.element));
+  return candidates.map((item) => item.element);
+}
+
+function resolveRecommendFilterClickTarget(element) {
+  const rect = element.getBoundingClientRect();
+  const x = Math.max(0, Math.min(window.innerWidth - 1, rect.left + rect.width / 2));
+  const y = Math.max(0, Math.min(window.innerHeight - 1, rect.top + rect.height / 2));
+  const target = document.elementFromPoint(x, y);
+  return target && element.contains(target) ? target : element;
 }
 
 async function dismissPreviousFilterPrompt() {
@@ -2011,6 +2150,19 @@ async function processNextRecommendBatchCard(options = {}) {
     const observedItems = [];
     let stalledLoads = 0;
     let scrollAttempts = 0;
+    let batchAdvanceAttempted = Boolean(options.batchAdvanceAttempted);
+    let batchAdvanceAction = options.batchAdvanceAction || "";
+    let batchAdvanceText = "";
+    let batchAdvanceSelector = "";
+    let batchAdvanceChanged = Boolean(options.batchAdvanceChanged);
+    let batchAdvanceReason = options.batchAdvanceReason || "";
+    const batchAdvanceDetails = () => ({
+      batchAdvanceAction,
+      batchAdvanceText,
+      batchAdvanceSelector,
+      batchAdvanceChanged,
+      batchAdvanceReason
+    });
 
     for (let pass = 0; pass < RECOMMEND_SCAN_MAX_PASSES; pass += 1) {
       const cards = currentRecommendBatchCards();
@@ -2056,7 +2208,8 @@ async function processNextRecommendBatchCard(options = {}) {
             skippedItems,
             filteredItems,
             observedItems,
-            scrollAttempts
+            scrollAttempts,
+            ...batchAdvanceDetails()
           });
         }
 
@@ -2080,13 +2233,18 @@ async function processNextRecommendBatchCard(options = {}) {
             skippedItems,
             filteredItems,
             observedItems,
-            scrollAttempts
+            scrollAttempts,
+            ...batchAdvanceDetails()
           });
         }
 
         const beforeCardText = truncateDiagnosticText(card.textContent || "", 260);
         clickElement(greeting.element);
-        const verification = await waitForRecommendCardGreetingState(card, item.fingerprint, 8000);
+        const verification = await waitForRecommendCardGreetingState(
+          card,
+          item.fingerprint,
+          RECOMMEND_GREETING_CONFIRM_TIMEOUT_MS
+        );
 
         if (verification.blockedReason) {
           return recommendBatchResultBase({
@@ -2100,6 +2258,7 @@ async function processNextRecommendBatchCard(options = {}) {
             filteredItems,
             observedItems,
             scrollAttempts,
+            ...batchAdvanceDetails(),
             greetingButtonText: greeting.text,
             greetingButtonSelector: greeting.selector,
             afterGreetingButtonText: verification.actionText,
@@ -2121,6 +2280,7 @@ async function processNextRecommendBatchCard(options = {}) {
             filteredItems,
             observedItems,
             scrollAttempts,
+            ...batchAdvanceDetails(),
             greetingButtonText: greeting.text,
             greetingButtonSelector: greeting.selector,
             afterGreetingButtonText: "继续沟通",
@@ -2133,13 +2293,14 @@ async function processNextRecommendBatchCard(options = {}) {
         return recommendBatchResultBase({
           outcome: "uncertain",
           clicked: true,
-          reason: "已点击打招呼，但 8 秒内同一张卡片未变为“继续沟通”，已暂停避免重复点击。",
+          reason: "已点击打招呼，但 15 秒内同一张卡片未变为“继续沟通”，已跳过该卡片避免重复点击。",
           item,
           scannedFingerprints: [...scannedFingerprints, item.fingerprint],
           skippedItems,
           filteredItems,
           observedItems,
           scrollAttempts,
+          ...batchAdvanceDetails(),
           greetingButtonText: greeting.text,
           greetingButtonSelector: greeting.selector,
           afterGreetingButtonText: verification.actionText,
@@ -2162,7 +2323,8 @@ async function processNextRecommendBatchCard(options = {}) {
           skippedItems,
           filteredItems,
           observedItems,
-          scrollAttempts
+          scrollAttempts,
+          ...batchAdvanceDetails()
         });
       }
       if (loadResult.changed) {
@@ -2170,18 +2332,62 @@ async function processNextRecommendBatchCard(options = {}) {
         continue;
       }
       stalledLoads += 1;
-      if (stalledLoads >= RECOMMEND_STALLED_LOAD_LIMIT) break;
+      if (stalledLoads >= RECOMMEND_STALLED_LOAD_LIMIT) {
+        if (!batchAdvanceAttempted && !detectRecommendListEndReason()) {
+          const advanceResult = await tryAdvanceRecommendBatch();
+          batchAdvanceAttempted = true;
+          batchAdvanceAction = advanceResult.action;
+          batchAdvanceText = advanceResult.text;
+          batchAdvanceSelector = advanceResult.selector;
+          batchAdvanceChanged = advanceResult.changed;
+          batchAdvanceReason = advanceResult.reason;
+
+          if (advanceResult.blockedReason) {
+            return recommendBatchResultBase({
+              outcome: "blocked",
+              blockedReason: advanceResult.blockedReason,
+              reason: advanceResult.blockedReason,
+              scannedFingerprints,
+              skippedItems,
+              filteredItems,
+              observedItems,
+              scrollAttempts,
+              batchAdvanceAction,
+              batchAdvanceText,
+              batchAdvanceSelector,
+              batchAdvanceChanged,
+              batchAdvanceReason
+            });
+          }
+          if (advanceResult.changed) {
+            stalledLoads = 0;
+            continue;
+          }
+        }
+        break;
+      }
     }
 
     const endReason = detectRecommendListEndReason();
+    const refreshRequired = !endReason && !batchAdvanceChanged && !options.batchAdvanceAttempted;
     return recommendBatchResultBase({
-      outcome: endReason ? "exhausted" : "waiting_candidates",
-      reason: endReason || "当前扫描范围暂时没有新候选人，将等待 BOSS 加载后自动重试。",
+      outcome: endReason ? "exhausted" : refreshRequired ? "recommend_refresh_required" : "waiting_candidates",
+      reason: endReason
+        || (refreshRequired
+          ? `${batchAdvanceReason || "当前推荐列表没有可用的换批控件"}，需要重新加载推荐列表。`
+          : batchAdvanceChanged
+            ? "已推进到新的推荐批次，但当前批次没有更多符合条件且未打招呼的候选人。"
+            : "重新加载推荐列表后仍未发现新候选人，将稍后自动重试。"),
       scannedFingerprints,
       skippedItems,
       filteredItems,
       observedItems,
-      scrollAttempts
+      scrollAttempts,
+      batchAdvanceAction,
+      batchAdvanceText,
+      batchAdvanceSelector,
+      batchAdvanceChanged,
+      batchAdvanceReason
     });
   } finally {
     recommendBatchStepInFlight = false;
@@ -2209,6 +2415,11 @@ function recommendBatchResultBase(values = {}) {
     skippedCount: skippedItems.length,
     scannedFingerprints: Array.from(new Set(values.scannedFingerprints || [])).filter(Boolean).slice(-200),
     scrollAttempts: Number(values.scrollAttempts || 0),
+    batchAdvanceAction: values.batchAdvanceAction || "",
+    batchAdvanceText: values.batchAdvanceText || "",
+    batchAdvanceSelector: values.batchAdvanceSelector || "",
+    batchAdvanceChanged: Boolean(values.batchAdvanceChanged),
+    batchAdvanceReason: values.batchAdvanceReason || "",
     greetingButtonText: values.greetingButtonText || "",
     greetingButtonSelector: values.greetingButtonSelector || "",
     directGreetingDetected: Boolean(values.directGreetingDetected),
@@ -2653,6 +2864,89 @@ function scrollRecommendListForward() {
   target.scrollTop = Math.min(target.scrollHeight, before + distance);
   target.dispatchEvent(new Event("scroll", { bubbles: true }));
   return { moved: Math.abs(target.scrollTop - before) > 2, before, after: target.scrollTop };
+}
+
+async function tryAdvanceRecommendBatch() {
+  const control = findRecommendBatchAdvanceControl();
+  if (!control) {
+    return {
+      action: "none",
+      text: "",
+      selector: "",
+      changed: false,
+      blockedReason: "",
+      reason: "未找到明确的“换一批/刷新推荐”控件"
+    };
+  }
+
+  const previousFingerprints = new Set(currentRecommendBatchFingerprints());
+  control.element.scrollIntoView?.({ block: "center", inline: "nearest" });
+  await waitForUiSettle(350);
+  clickElement(control.element);
+  const update = await waitForRecommendBatchReplacement(previousFingerprints, RECOMMEND_BATCH_ADVANCE_TIMEOUT_MS);
+  return {
+    action: "page_control",
+    text: control.text,
+    selector: control.selector,
+    changed: update.changed,
+    blockedReason: update.blockedReason,
+    reason: update.changed
+      ? `已点击“${control.text}”并加载新的推荐批次`
+      : `已点击“${control.text}”，但推荐列表没有出现新候选人`
+  };
+}
+
+function findRecommendBatchAdvanceControl() {
+  const listRoot = document.querySelector("#recommend-list, .recommend-list-wrap, .recommend-list, .list-wrap.card-list-wrap");
+  const labels = new Map([
+    ["换一批", 100],
+    ["换一组", 95],
+    ["刷新推荐", 90],
+    ["下一批", 85],
+    ["加载更多", 70],
+    ["查看更多", 60],
+    ["刷新", 50]
+  ]);
+  const controls = [];
+
+  for (const element of document.querySelectorAll("button, a, [role=button], .btn, [class*=refresh], [class*=change]")) {
+    if (!isVisible(element) || element.closest(RECOMMEND_PERSON_CARD_SELECTOR)) continue;
+    if (element.matches(":disabled, [disabled], [aria-disabled=true]")) continue;
+    if (element.closest(".ui-dialog, .dialog, .modal, [class*=filter]")) continue;
+
+    const text = normalizeText(element.textContent || element.getAttribute("aria-label") || element.getAttribute("title") || "");
+    const score = labels.get(text);
+    if (!score) continue;
+    if (score < 80 && listRoot && !listRoot.contains(element)) continue;
+    controls.push({ element, text, score, selector: diagnosticSelector(element) });
+  }
+
+  controls.sort((a, b) => b.score - a.score);
+  return controls[0] || null;
+}
+
+function currentRecommendBatchFingerprints() {
+  return currentRecommendBatchCards()
+    .map((card) => {
+      const rawText = normalizeText(card.textContent || "");
+      return recommendCardFingerprint(card, rawText, findProfileUrl(card) || "");
+    })
+    .filter(Boolean);
+}
+
+async function waitForRecommendBatchReplacement(previousFingerprints, timeoutMs) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    await waitForUiSettle(500);
+    const blockedReason = detectGreetingBlockedReason();
+    if (blockedReason) return { changed: false, blockedReason };
+
+    const fingerprints = currentRecommendBatchFingerprints();
+    if (fingerprints.some((fingerprint) => !previousFingerprints.has(fingerprint))) {
+      return { changed: true, blockedReason: "" };
+    }
+  }
+  return { changed: false, blockedReason: "" };
 }
 
 function findRecommendScrollTarget() {
@@ -3121,9 +3415,3 @@ globalThis.__recruitmentAssistantInspectRecommendGreetingState = inspectRecommen
 function normalizeText(value) {
   return value.replace(/\s+/g, " ").trim();
 }
-
-
-
-
-
-

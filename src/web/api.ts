@@ -214,6 +214,11 @@ export type GreetingActionResult = {
   skippedCount: number;
   scannedFingerprints: string[];
   scrollAttempts: number;
+  batchAdvanceAction: string;
+  batchAdvanceText: string;
+  batchAdvanceSelector: string;
+  batchAdvanceChanged: boolean;
+  batchAdvanceReason: string;
   filled: boolean;
   readyToSend: boolean;
   sent: boolean;

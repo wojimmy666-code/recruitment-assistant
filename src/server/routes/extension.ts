@@ -130,6 +130,11 @@ type ExtensionGreetingActionResult = {
   skippedCount: number;
   scannedFingerprints: string[];
   scrollAttempts: number;
+  batchAdvanceAction: string;
+  batchAdvanceText: string;
+  batchAdvanceSelector: string;
+  batchAdvanceChanged: boolean;
+  batchAdvanceReason: string;
   filled: boolean;
   readyToSend: boolean;
   sent: boolean;
@@ -406,10 +411,32 @@ export function createExtensionRouter({ db }: { db: AppDatabase }) {
   router.post("/greeting-batch/pause", asyncHandler(async (req, res) => {
     if (!lastGreetingBatch) throw new Error("greeting_batch_not_started");
     if (lastGreetingBatch.status !== "completed" && lastGreetingBatch.status !== "blocked") {
+      const now = new Date().toISOString();
+      const reason = truncateText(String(req.body.reason || "用户手动暂停"), 240);
       lastGreetingBatch.status = "paused";
-      lastGreetingBatch.pauseReason = truncateText(String(req.body.reason || "用户手动暂停"), 240);
+      lastGreetingBatch.pauseReason = reason;
       lastGreetingBatch.nextAllowedAt = "";
-      lastGreetingBatch.updatedAt = new Date().toISOString();
+      lastGreetingBatch.updatedAt = now;
+      if (req.body.kind === "filter_failure") {
+        const actionResult = normalizeGreetingActionResult({
+          ok: false,
+          outcome: "filter_failed",
+          reason,
+          href: lastGreetingBatch.sourceUrl,
+          path: "/web/chat/recommend"
+        }, lastGreetingBatch.sourceUrl);
+        const item = normalizeGreetingTestItem({}, lastGreetingBatch.sourceUrl);
+        lastGreetingBatch.records = [...lastGreetingBatch.records, {
+          at: now,
+          status: "filter_failed",
+          errorMessage: reason,
+          item,
+          messagePreview: "",
+          clickResult: actionResult,
+          composerResult: actionResult,
+          actionResult
+        }].slice(-100);
+      }
       emitGreetingBatch();
     }
     res.json({ ok: true, batch: lastGreetingBatch });
@@ -462,6 +489,7 @@ function deriveDirectGreetingBatchStatus(actionResult: ExtensionGreetingActionRe
   if (actionResult.outcome === "direct_greeted" && actionResult.directGreetingDetected) return "direct_greeted";
   if (actionResult.outcome === "exhausted") return "exhausted";
   if (actionResult.outcome === "waiting_candidates") return "waiting_candidates";
+  if (actionResult.outcome === "recommend_refresh_required") return "waiting_candidates";
   if (actionResult.outcome === "uncertain") return "uncertain";
   return "failed";
 }
@@ -735,6 +763,11 @@ function normalizeGreetingActionResult(input: unknown, pageUrl = ""): ExtensionG
     skippedCount: Math.max(skippedItems.length, toFiniteNumber(record.skippedCount)),
     scannedFingerprints: normalizeStringArray(record.scannedFingerprints, 200, 500),
     scrollAttempts: Math.max(0, toFiniteNumber(record.scrollAttempts)),
+    batchAdvanceAction: truncateText(String(record.batchAdvanceAction || ""), 40),
+    batchAdvanceText: truncateText(String(record.batchAdvanceText || ""), 80),
+    batchAdvanceSelector: truncateText(String(record.batchAdvanceSelector || ""), 240),
+    batchAdvanceChanged: Boolean(record.batchAdvanceChanged),
+    batchAdvanceReason: truncateText(String(record.batchAdvanceReason || ""), 240),
     filled: Boolean(record.filled),
     readyToSend: Boolean(record.readyToSend),
     sent: Boolean(record.sent),

@@ -15,7 +15,11 @@ This extension lets the local recruitment assistant reuse an already logged-in C
 9. Click the extension icon and choose `诊断筛选控件` when BOSS selectors need calibration. The extension will read visible filter inputs/buttons from every accessible BOSS frame and save the latest report to the local app.
 10. Click the extension icon and choose `筛选并采集` to fill filters from the local default job, verify the list refreshed, and import candidates. Use `仅采集当前页` only when the BOSS list is already filtered.
 
-The extension reads the local default job from `http://localhost:3000/api/jobs`, fills visible BOSS filter controls inside the current page or same-origin frames, stops if no submit button/list refresh is detected, then posts candidates to `http://localhost:3000/api/extension/candidates`. The `诊断筛选控件` action posts a bounded selector report to `http://localhost:3000/api/extension/filter-diagnostics` and does not click, fill, submit, or collect candidates. It does not log in, bypass captcha, bypass risk controls, or click send.
+The extension reads the local default job from `http://localhost:3218/api/jobs`, fills visible BOSS filter controls inside the current page or same-origin frames, stops if no submit button/list refresh is detected, then posts candidates to `http://localhost:3218/api/extension/candidates`. The `诊断筛选控件` action posts a bounded selector report to `http://localhost:3218/api/extension/filter-diagnostics` and does not click, fill, submit, or collect candidates. It does not log in, bypass captcha, bypass risk controls, or click send.
+
+During a greeting batch, the extension first scrolls the current recommendation list. When that list no longer produces new candidate fingerprints, it uses an explicit `换一批` or `刷新推荐` control when available. Otherwise it reloads only the recommendation frame, reapplies the saved filters, and continues with fingerprint deduplication. Repeated reloads that still produce no new candidates retain the existing automatic pause behavior.
+
+After a recommendation-frame reload, filter reapplication waits for both the candidate-list surface and the filter trigger. The filter dialog is opened with bounded retries and must expose its age, gender, and confirmation controls before any batch greeting can continue.
 
 
 

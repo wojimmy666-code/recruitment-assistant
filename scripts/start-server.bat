@@ -32,7 +32,7 @@ if not exist "node_modules\.bin\tsx.cmd" (
 )
 
 echo Starting Recruitment Assistant...
-echo Local URL: http://localhost:3000
+echo Local URL: http://localhost:3218
 echo Press Ctrl+C to stop the server.
 echo.
 

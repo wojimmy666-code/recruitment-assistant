@@ -533,7 +533,7 @@ import { createSendRouter } from "./routes/send";
 import { createFilterRouter } from "./routes/filter";
 
 const app = express();
-const port = Number(process.env.PORT || 3000);
+const port = Number(process.env.PORT || 3218);
 
 const db = initDb();
 const scheduler = createScheduler({ db });
@@ -1138,7 +1138,7 @@ th {
 6. 必须有每日发送上限、去重、暂停、登录/验证码/页面异常自动暂停。
 7. 不要绕过验证码，不要绕过登录，不要做无限批量发送。
 8. BOSS 页面 selector 先做成 adapter 层，允许后续根据实际页面 DOM 调整。
-9. 实现 npm run dev 启动，打开 http://localhost:3000 可用。
+9. 实现 npm run dev 启动，打开 http://localhost:3218 可用。
 10. UI 不要做登录页、营销页、复杂导航、候选人详情页、AI 文案页或看板页；优先还原浅灰背景、白色双栏面板、绿色主动作、黄色安全提示条。
 11. 完成后运行 typecheck，并说明还有哪些 selector 需要在真实页面上校准。
 ```
